@@ -81,20 +81,21 @@ func (plugin *BDConfigurator) Resync(nbBDs []*l2.BridgeDomains_BridgeDomain) err
 func (plugin *FIBConfigurator) Resync(fibConfig []*l2.FibTableEntries_FibTableEntry) error {
 	log.WithField("cfg", plugin).Debug("RESYNC FIBs begin.")
 
-	for _, fib := range fibConfig {
-		plugin.Add(fib, func(err2 error) {
-			if err2 != nil {
-				log.Error(err2)
-			}
-		})
-	}
-
 	activeDomains, err := vppdump.DumpBridgeDomainIDs(plugin.vppChannel)
 	if err != nil {
 		return err
 	}
 	for _, domainID := range activeDomains {
 		plugin.LookupFIBEntries(domainID)
+	}
+
+	for _, fib := range fibConfig {
+		plugin.Add(fib, func(err2 error) {
+			if err2 != nil {
+				log.Error(err2)
+			}
+
+		})
 	}
 
 	log.WithField("cfg", plugin).Debug("RESYNC FIBs end.")
