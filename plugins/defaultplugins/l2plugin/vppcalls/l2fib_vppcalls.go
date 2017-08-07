@@ -17,12 +17,14 @@ package vppcalls
 import (
 	"container/list"
 	"fmt"
+	"strconv"
+	"strings"
+
 	govppapi "git.fd.io/govpp.git/api"
 	log "github.com/ligato/cn-infra/logging/logrus"
 	"github.com/ligato/cn-infra/utils/safeclose"
 	l2ba "github.com/ligato/vpp-agent/plugins/defaultplugins/l2plugin/bin_api/l2"
-	"strconv"
-	"strings"
+	"github.com/ligato/vpp-agent/plugins/govppmux"
 )
 
 // FibLogicalReq groups multiple fields to not enumerate all of them in one function call (request, reply/callback)
@@ -37,8 +39,14 @@ type FibLogicalReq struct {
 }
 
 // NewL2FibVppCalls is a constructor
-func NewL2FibVppCalls(vppChan *govppapi.Channel) *L2FibVppCalls {
-	return &L2FibVppCalls{vppChan, list.New()}
+func NewL2FibVppCalls(goVppmux *govppmux.GOVPPPlugin) (*L2FibVppCalls, error) {
+	// Init VPP API channel for asynchronous communication
+	vppChan, err := goVppmux.NewAPIChannel()
+	if err != nil {
+		return nil, err
+	}
+
+	return &L2FibVppCalls{vppChan, list.New()}, nil
 }
 
 // L2FibVppCalls aggregates vpp calls related to l2 fib

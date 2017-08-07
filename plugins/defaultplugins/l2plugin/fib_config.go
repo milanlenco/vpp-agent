@@ -63,7 +63,7 @@ func (plugin *FIBConfigurator) Init() (err error) {
 	// Init local mapping
 	plugin.FibDesIndexes = nametoidx.NewNameToIdx(logroot.Logger(), "l2plugin", "fib_des_indexes", nil)
 
-	// Init VPP API channel
+	// Init VPP API channel for synchronous communication
 	plugin.vppChannel, err = plugin.GoVppmux.NewAPIChannel()
 	if err != nil {
 		return err
@@ -74,7 +74,10 @@ func (plugin *FIBConfigurator) Init() (err error) {
 		return err
 	}
 
-	plugin.vppcalls = vppcalls.NewL2FibVppCalls(plugin.vppChannel)
+	plugin.vppcalls, err = vppcalls.NewL2FibVppCalls(plugin.GoVppmux)
+	if err != nil {
+		return err
+	}
 	go plugin.vppcalls.WatchFIBReplies()
 
 	return nil
