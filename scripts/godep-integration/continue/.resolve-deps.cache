@@ -1,0 +1,57 @@
+conflict-resolution:
+- dependencies:
+  - package: github.com/docker/docker
+    subpackages:
+    - api
+    - api/server/httputils
+    - api/types
+    - api/types/blkiodev
+    - api/types/container
+    - api/types/events
+    - api/types/filters
+    - api/types/mount
+    - api/types/network
+    - api/types/reference
+    - api/types/registry
+    - api/types/strslice
+    - api/types/swarm
+    - api/types/time
+    - api/types/versions
+    - api/types/volume
+    - client
+    - dockerversion
+    - pkg/ioutils
+    - pkg/longpath
+    - pkg/parsers/kernel
+    - pkg/plugingetter
+    - pkg/plugins
+    - pkg/plugins/transport
+    - pkg/system
+    - pkg/tlsconfig
+    - pkg/useragent
+    version: 8b1112be3ba30451578b0033f98600b4c7f50909
+  - package: github.com/Sirupsen/logrus
+    subpackages:
+    - hooks/syslog
+    version: 7f4b1adc791766938c29457bed0703fb9134421a
+  - package: github.com/coreos/etcd
+    subpackages:
+    - Godeps/_workspace/src/github.com/ugorji/go/codec
+    - Godeps/_workspace/src/golang.org/x/net/context
+    - client
+    - pkg/pathutil
+    - pkg/types
+    version: 7e4fc7eaa931298732c880a703bccc9c177ae1de
+  - package: github.com/ghodss/yaml
+    version: 0ca9ea5df5451ffdf184b4428c902747c2c11cd7
+  - package: github.com/golang/protobuf
+    subpackages:
+    - proto
+    version: 2c1988e8c18d14b142c0b472624f71647cf39adb
+  - package: github.com/gorilla/mux
+    version: 8096f47503459bcc74d1f4c487b7e6e42e5746b5
+  - package: github.com/satori/go.uuid
+    version: d41af8bb6a7704f00bc3b7cba9355ae6a5a80048
+  - package: gopkg.in/inf.v0
+    version: 3887ee99ecf07df5b447e9b00d9c0b2adaa9f3e4
+  package: github.com/contiv/netplugin
