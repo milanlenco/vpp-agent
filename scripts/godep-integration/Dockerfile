@@ -11,7 +11,7 @@ RUN mkdir -p $HOME
 WORKDIR $HOME
 
 RUN apt-get update && apt-get install -y \
-    sudo wget git vim python python-yaml curl
+    sudo wget git vim python python-yaml curl rsync
 
 # install Go
 RUN wget https://storage.googleapis.com/golang/go1.8.3.linux-amd64.tar.gz && \
@@ -32,11 +32,12 @@ RUN curl https://glide.sh/get | sh
 # Install Godep
 RUN go get github.com/tools/godep
 
-# Install Go-Getter
-RUN git clone https://github.com/joewalnes/go-getter && \
-    cp go-getter/go-getter $GOPATH/bin/ && \
-    chmod u+x $GOPATH/bin/go-getter
+## Install Go-Getter
+#RUN git clone https://github.com/joewalnes/go-getter && \
+#    cp go-getter/go-getter $GOPATH/bin/ && \
+#    chmod u+x $GOPATH/bin/go-getter
 
 # copy and execute the integration script
-COPY integrate-agent.sh .
-ENTRYPOINT $HOME/integrate-agent.sh
+RUN mkdir -p $HOME/scripts
+COPY scripts/integrate-agent.sh $HOME/scripts/
+ENTRYPOINT $HOME/scripts/integrate-agent.sh

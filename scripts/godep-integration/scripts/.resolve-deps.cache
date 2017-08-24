@@ -1,0 +1,53 @@
+conflict-resolution:
+- dependencies:
+  - package: github.com/docker/docker
+    version: d311a3a681f918906249a1678eab0136ac663f6e
+  - package: github.com/Sirupsen/logrus
+    version: v1.0.0
+  - package: github.com/coreos/etcd
+    subpackages:
+    - Godeps/_workspace/src/github.com/ugorji/go/codec
+    - Godeps/_workspace/src/golang.org/x/net/context
+    - client
+    - pkg/pathutil
+    - pkg/types
+    version: 7e4fc7eaa931298732c880a703bccc9c177ae1de
+  - package: github.com/ghodss/yaml
+    version: 0ca9ea5df5451ffdf184b4428c902747c2c11cd7
+  - package: github.com/golang/protobuf
+    subpackages:
+    - proto
+    version: 2c1988e8c18d14b142c0b472624f71647cf39adb
+  - package: github.com/gorilla/mux
+    version: 8096f47503459bcc74d1f4c487b7e6e42e5746b5
+  - package: github.com/satori/go.uuid
+    version: d41af8bb6a7704f00bc3b7cba9355ae6a5a80048
+  - package: gopkg.in/inf.v0
+    version: 3887ee99ecf07df5b447e9b00d9c0b2adaa9f3e4
+  package: github.com/contiv/netplugin
+- dependencies:
+  - package: github.com/docker/docker
+    version: d311a3a681f918906249a1678eab0136ac663f6e
+  - package: github.com/Sirupsen/logrus
+    version: v1.0.0
+  - package: github.com/coreos/etcd
+    subpackages:
+    - Godeps/_workspace/src/github.com/ugorji/go/codec
+    - Godeps/_workspace/src/golang.org/x/net/context
+    - client
+    - pkg/pathutil
+    - pkg/types
+    version: 7e4fc7eaa931298732c880a703bccc9c177ae1de
+  - package: github.com/ghodss/yaml
+    version: 0ca9ea5df5451ffdf184b4428c902747c2c11cd7
+  - package: github.com/golang/protobuf
+    subpackages:
+    - proto
+    version: 2c1988e8c18d14b142c0b472624f71647cf39adb
+  - package: github.com/gorilla/mux
+    version: 8096f47503459bcc74d1f4c487b7e6e42e5746b5
+  - package: github.com/satori/go.uuid
+    version: d41af8bb6a7704f00bc3b7cba9355ae6a5a80048
+  - package: gopkg.in/inf.v0
+    version: 3887ee99ecf07df5b447e9b00d9c0b2adaa9f3e4
+  package: contiv/netplugin/

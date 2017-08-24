@@ -4,11 +4,16 @@ import sys, getopt, os
 import yaml
 import subprocess
 
-
 AGENT_PCKG = "github.com/ligato/vpp-agent"
 CN_INFRA_PCKG = "github.com/ligato/cn-infra"
 CACHE = ".resolve-deps.cache"
 CACHE_CONFLICT_RES = "conflict-resolution"
+
+# Terminal colors
+QUESTION='\033[0;36m'
+WARNING='\033[0;31m'
+INFO='\033[0;32m'
+EOL='\033[0m'
 
 
 def get_git_revision_hash(path):
@@ -39,18 +44,19 @@ def add_dependency(target_deps, dep, quiet=False):
     if not quiet:
         package = dep['package']
         version = dep['version'] if dep.has_key('version') else 'unspecified'
-        print "Inserting new dependency: '%s', version: '%s'" % (package, version)
+        print INFO + "Inserting new dependency: '%s', version: '%s'" % (package, version) + EOL
     target_deps.append(dep)
 
 
 def update_dependency(dep, new_dep, quiet=False):
     package = dep['package']
     if package != new_dep['package']:
-        print "WARNING: dependency mismatch!"
+        print WARNING + "WARNING: dependency mismatch!" + EOL
     if not quiet:
         old_version = dep['version'] if dep.has_key('version') else 'unspecified'
         new_version = new_dep['version'] if new_dep.has_key('version') else 'unspecified'
-        print "Updating dependency: '%s', version: '%s', to version: '%s'" % (package, old_version, new_version)
+        print (INFO + "Updating dependency: '%s', version: '%s', to version: '%s'" 
+                % (package, old_version, new_version) + EOL)
     dep.clear()
     dep.update(new_dep)
 
@@ -70,7 +76,7 @@ def resolve_conflict(target_pckg, target_dep, agent_dep, conflicts_cache, use_ca
         update_dependency(target_dep, cached_dep)
     else:
         prioritize_agent = False
-        print "Do you want to prioritize agent over %s? (Y/N):" % target_pckg
+        print QUESTION + "Do you want to prioritize agent over %s? (Y/N):" % target_pckg + EOL
         while True:
             choice = raw_input().lower()
             if choice == 'y':
@@ -80,7 +86,7 @@ def resolve_conflict(target_pckg, target_dep, agent_dep, conflicts_cache, use_ca
                 prioritize_agent = False
                 break
             else:
-                print "Please respond with 'Y/y' or 'N/n'"
+                print WARNING + "Please respond with 'Y/y' or 'N/n'" + EOL
         to_cache = target_dep
         if prioritize_agent:
             update_dependency(target_dep, agent_dep)
@@ -100,8 +106,9 @@ def resolve_conflicts(target_pckg, target_deps, agent_deps, conflicts_cache, use
             if agent_dep is not None:
                 agent_dep_ver = agent_dep['version'] if agent_dep.has_key('version') else ''
                 if dep_ver != agent_dep_ver:
-                    print ("Conflicting dependency: '%s', target version: '%s', version used by agent: '%s'"
-                            % (package, dep_ver, agent_dep_ver))
+                    print (WARNING +
+                            "Conflicting dependency: '%s', target version: '%s', version used by agent: '%s'"
+                            % (package, dep_ver, agent_dep_ver) + EOL)
                     resolve_conflict(target_pckg, dep, agent_dep, conflicts_cache, use_cache)
 
 
@@ -144,7 +151,7 @@ def resolve_deps(agent, target, use_cache):
         conflicts_cache = {'package': target_pckg, 'dependencies': []}
         cache_yaml[CACHE_CONFLICT_RES].append(conflicts_cache)
 
-    print "Cached conflict resolutions: %s, use cache: %s" % (str(conflicts_cache), str(use_cache))
+    #print "Cached conflict resolutions: %s, use cache: %s" % (str(conflicts_cache), str(use_cache))
     #print "Agent revision: %s" % get_git_revision_hash(agent)
     #print "Agent deps: %s" % str(agent_deps)
     #print "Target glide yaml: %s" % str(target_glide_yaml)
@@ -173,9 +180,10 @@ def resolve_deps(agent, target, use_cache):
     resolve_conflicts(target_pckg, target_deps, agent_deps, conflicts_cache, use_cache)
     resolve_conflicts(target_pckg, target_deps, cn_infra_deps, conflicts_cache, use_cache)
 
-    print "Target glide yaml: %s" % str(target_glide_yaml)
-    print
-    print "Cache yaml: %s" % str(cache_yaml)
+    # TODO: add *explicitly defined* *extra deps* from the agent
+
+    #print "Target glide yaml: %s" % str(target_glide_yaml)
+    #print "Cache yaml: %s" % str(cache_yaml)
 
     # dump resolved version of target glide.yaml and the cache
     dump_yaml(os.path.join(target, "glide-resolved.yaml"), target_glide_yaml)

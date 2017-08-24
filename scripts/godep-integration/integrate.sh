@@ -26,8 +26,8 @@ fi
 
 echo "Integrate agent commit number: $AGENT_COMMIT, into the package: $TARGET"
 
-#docker build -t godep_vpp_agent_integration --build-arg AGENT_COMMIT=$AGENT_COMMIT --build-arg TARGET=$TARGET --no-cache .
+docker build -t godep_vpp_agent_integration --build-arg AGENT_COMMIT=$AGENT_COMMIT --build-arg TARGET=$TARGET --no-cache .
 docker run -it --rm --name ${TARGET##*/}_vpp_agent_integration \
-    -v ${GOPATH}/src/$TARGET:/integration/go/src/$TARGET \
-    -v ${PWD}/continue:/integration/continue \
-    -v ${PWD}/.resolve-deps.cache:/integration/continue/.resolve-deps.cache godep_vpp_agent_integration
+    -v ${GOPATH}/src/${TARGET}:/integration/go/src/$TARGET \
+    -v ${PWD}/scripts:/integration/scripts \
+    godep_vpp_agent_integration
