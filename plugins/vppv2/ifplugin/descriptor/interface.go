@@ -68,6 +68,9 @@ const (
 	defaultMemifNumOfQueues uint32 = 1
 	defaultMemifBufferSize  uint32 = 2048
 	defaultMemifRingSize    uint32 = 1024
+
+	// local0 is an ever-present interface on VPP that agent should not touch
+	local0Interface = "local0"
 )
 
 // A list of non-retriable errors:

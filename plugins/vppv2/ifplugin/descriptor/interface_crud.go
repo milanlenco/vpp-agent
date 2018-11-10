@@ -437,7 +437,7 @@ func (d *InterfaceDescriptor) Dump(correlate []adapter.InterfaceKVWithMetadata) 
 
 	for ifIdx, intf := range vppIfs {
 		origin := scheduler.FromNB
-		if ifIdx == 0 {
+		if intf.Meta.InternalName == local0Interface {
 			// local0 is created automatically
 			origin = scheduler.FromSB
 		}
