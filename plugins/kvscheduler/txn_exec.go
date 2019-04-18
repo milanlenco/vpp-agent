@@ -270,7 +270,7 @@ func (s *Scheduler) applyDelete(node graph.NodeRW, txnOp *kvs.RecordedTxnOp, arg
 	prevState := getNodeState(node)
 	defer func() {
 		if inheritedErr != nil {
-			// revert back to available, derived value failed instead
+			// revert back to available, derived/dependant value failed instead
 			node.DelFlags(UnavailValueFlagIndex)
 			s.updateNodeState(node, prevState, args)
 			return
