@@ -30,6 +30,7 @@ import (
 	"github.com/ligato/cn-infra/rpc/rest"
 
 	kvs "github.com/ligato/vpp-agent/plugins/kvscheduler/api"
+	exec "github.com/ligato/vpp-agent/plugins/kvscheduler/internal/exec-engine"
 	"github.com/ligato/vpp-agent/plugins/kvscheduler/internal/graph"
 	"github.com/ligato/vpp-agent/plugins/kvscheduler/internal/registry"
 	"github.com/ligato/vpp-agent/plugins/kvscheduler/internal/utils"
@@ -63,6 +64,10 @@ const (
 	// by default, a concise summary of every processed transactions is printed
 	// to stdout
 	defaultPrintTxnSummary = true
+
+	// by default, 1 worker executes all the transaction operations (i.e. by default
+	// the parallelism is disabled).
+	defaultNumTxnWorkers = 1
 
 	// name of the environment variable used to enable verification after every transaction
 	verifyModeEnv = "KVSCHED_VERIFY_MODE"
@@ -99,6 +104,7 @@ type Scheduler struct {
 	keyPrefixes []string
 
 	// TXN processing
+	execEngine   exec.TxnExecEngine
 	txnLock      sync.Mutex // can be used to pause transaction processing; always lock before the graph!
 	txnQueue     chan *transaction
 	txnSeqNumber uint64
@@ -131,6 +137,7 @@ type Config struct {
 	PermanentlyRecordedInitPeriod uint32 `json:"permanently-recorded-init-period"` // in minutes
 	EnableTxnSimulation           bool   `json:"enable-txn-simulation"`
 	PrintTxnSummary               bool   `json:"print-txn-summary"`
+	NumTxnWorkers                 uint32 `json:"number-of-txn-workers"`
 }
 
 // SchedulerTxn implements transaction for the KV scheduler.
@@ -155,6 +162,7 @@ func (s *Scheduler) Init() error {
 		PermanentlyRecordedInitPeriod: defaultPermanentlyRecordedInitPeriod,
 		EnableTxnSimulation:           defaultEnableTxnSimulation,
 		PrintTxnSummary:               defaultPrintTxnSummary,
+		NumTxnWorkers:                 defaultNumTxnWorkers,
 	}
 
 	// load configuration
@@ -177,6 +185,8 @@ func (s *Scheduler) Init() error {
 	s.graph = graph.NewGraph(graphOpts)
 	// initialize registry for key->descriptor lookups
 	s.registry = registry.NewRegistry()
+	// create engine for transaction execution
+	s.execEngine = exec.NewTxnExecEngine(s, int(s.config.NumTxnWorkers), s.logGraphWalk)
 	// prepare channel for serializing transactions
 	s.txnQueue = make(chan *transaction, 100)
 	// register REST API handlers

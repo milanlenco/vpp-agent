@@ -171,7 +171,7 @@ func (s *Scheduler) applyValue(args *applyValueArgs) (executed kvs.RecordedTxnOp
 
 	// determine the operation type
 	if args.isDepUpdate {
-		s.determineDepUpdateOperation(node, txnOp)
+		txnOp.Operation = s.determineDepUpdateOperation(node)
 		if txnOp.Operation == kvs.TxnOperation_UNDEFINED {
 			// nothing needs to be updated
 			if node.GetValue() == nil {
@@ -791,18 +791,19 @@ func (s *Scheduler) runDepUpdates(node graph.Node, args *applyValueArgs) (execut
 
 // determineDepUpdateOperation determines if the value needs update wrt. dependencies
 // and what operation to execute.
-func (s *Scheduler) determineDepUpdateOperation(node graph.NodeRW, txnOp *kvs.RecordedTxnOp) {
+func (s *Scheduler) determineDepUpdateOperation(node graph.NodeRW) kvs.TxnOperation {
 	// create node if dependencies are now all met
 	if !isNodeAvailable(node) {
 		if !isNodeReady(node) {
 			// nothing to do
-			return
+			return kvs.TxnOperation_UNDEFINED
 		}
-		txnOp.Operation = kvs.TxnOperation_CREATE
+		return kvs.TxnOperation_CREATE
 	} else if !isNodeReady(node) {
 		// node should not be available anymore
-		txnOp.Operation = kvs.TxnOperation_DELETE
+		return kvs.TxnOperation_DELETE
 	}
+	return kvs.TxnOperation_UNDEFINED
 }
 
 // compressTxnOps removes uninteresting intermediate pending Create/Delete operations.

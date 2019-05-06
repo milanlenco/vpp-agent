@@ -129,7 +129,7 @@ func (s *Scheduler) processTransaction(txn *transaction) {
 	var simulatedOps kvs.RecordedTxnOps
 	if !skipSimulation {
 		graphW := s.graph.Write(false, record)
-		simulatedOps = s.executeTransaction(txn, graphW, true)
+		simulatedOps = s.executeTransactionBFS(txn, graphW, true)
 		if len(simulatedOps) == 0 {
 			// nothing to execute
 			graphW.Save()
@@ -145,7 +145,7 @@ func (s *Scheduler) processTransaction(txn *transaction) {
 	var executedOps kvs.RecordedTxnOps
 	if !skipExec {
 		graphW := s.graph.Write(true, record)
-		executedOps = s.executeTransaction(txn, graphW, false)
+		executedOps = s.executeTransactionBFS(txn, graphW, false)
 		graphW.Release()
 	}
 

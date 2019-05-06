@@ -59,6 +59,10 @@ enum ValueState {
     // operation are planned, and only if all the retries fail, the value will
     // then transit to the FAILED state.
     RETRYING = 10;
+
+    // Create/Update/Delete operation, executed asynchronously from another go
+    // routine.
+    INPROGRESS = 11;
 }
 
 enum TxnOperation {

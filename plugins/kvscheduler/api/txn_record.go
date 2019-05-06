@@ -92,6 +92,10 @@ type RecordedTxnOp struct {
 	NewErr    error
 	NOOP      bool
 
+	// times
+	ExecBegin time.Time
+	ExecEnd   time.Time
+
 	// flags
 	IsDerived  bool
 	IsProperty bool
