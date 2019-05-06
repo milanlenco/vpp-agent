@@ -3,7 +3,7 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:aaae97dc194a8788de45e1f4749d658a0ef26b23824a30fa86cc78fe147b9e8c"
+  digest = "1:b68f0400b0fd5af64360875e48db85e7f73ab96e7ce0edbc68f605a4aa4e39b6"
   name = "git.fd.io/govpp.git"
   packages = [
     "adapter",
@@ -18,7 +18,7 @@
     "examples/bin_api/memclnt",
   ]
   pruneopts = "UT"
-  revision = "a382cf59843b92bbff28c7c4d3f26b389d1e1844"
+  revision = "f614a0af720702c8db959b6641b4faea5f98c339"
 
 [[projects]]
   branch = "master"
@@ -500,7 +500,7 @@
 
 [[projects]]
   branch = "dev"
-  digest = "1:a1743a974d8166ae0d53abd328af739c34c6822486b7661dc3b8ddd4e31601e8"
+  digest = "1:14123b44f7cd5891c500adedb96f6817f2291e2eb35994dd5952c4bf658625ff"
   name = "github.com/ligato/cn-infra"
   packages = [
     "agent",
@@ -543,7 +543,7 @@
     "utils/safeclose",
   ]
   pruneopts = "T"
-  revision = "77e78aeca2f5c728bcf836bcbd20da7afea8ffde"
+  revision = "c4fe1a7553d51402cdc59e09460c9b44485f3259"
 
 [[projects]]
   branch = "master"
