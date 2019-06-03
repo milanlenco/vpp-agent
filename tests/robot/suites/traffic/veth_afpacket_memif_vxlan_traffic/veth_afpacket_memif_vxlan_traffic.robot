@@ -41,7 +41,7 @@ Setup Interfaces
     @{ints}=    Create List    vpp1_vxlan1    vpp1_afpacket1
     Put Bridge Domain    node=agent_vpp_1    name=vpp1_bd1    ints=${ints}
     Put Loopback Interface With IP    node=agent_vpp_1    name=vpp1_loop1    mac=12:21:21:11:11:11    ip=20.20.1.1
-    Put TAP Interface With IP    node=agent_vpp_1    name=vpp1_tap1    mac=32:21:21:11:11:11    ip=30.30.1.1    host_if_name=linux_vpp1_tap1
+    Put TAPv2 Interface With IP    node=agent_vpp_1    name=vpp1_tap1    mac=32:21:21:11:11:11    ip=30.30.1.1    host_if_name=linux_vpp1_tap1
 
     Put Memif Interface With IP    node=agent_vpp_2    name=vpp2_memif1    mac=62:62:62:62:62:62    master=false    id=1    ip=192.168.1.2
     Put Veth Interface With IP    node=agent_vpp_2    name=vpp2_veth1    mac=22:21:21:21:21:21    peer=vpp2_veth2    ip=10.10.1.2
@@ -51,7 +51,7 @@ Setup Interfaces
     @{ints}=    Create List    vpp2_vxlan1    vpp2_afpacket1
     Put Bridge Domain    node=agent_vpp_2    name=vpp2_bd1    ints=${ints}
     Put Loopback Interface With IP    node=agent_vpp_2    name=vpp2_loop1    mac=22:21:21:11:11:11    ip=20.20.1.2
-    Put TAP Interface With IP    node=agent_vpp_2    name=vpp2_tap1    mac=32:22:22:11:11:11    ip=30.30.1.2    host_if_name=linux_vpp2_tap1
+    Put TAPv2 Interface With IP    node=agent_vpp_2    name=vpp2_tap1    mac=32:22:22:11:11:11    ip=30.30.1.2    host_if_name=linux_vpp2_tap1
     Sleep    ${SYNC_SLEEP}
 
 Check Linux Interfaces On VPP1
@@ -115,7 +115,6 @@ Show Interfaces And Other Objects After Config
     Write To Machine    agent_vpp_2_term    show err     
     vat_term: Interfaces Dump    agent_vpp_1
     vat_term: Interfaces Dump    agent_vpp_2
-    Write To Machine    vpp_agent_ctl    vpp-agent-ctl ${AGENT_VPP_ETCD_CONF_PATH} -ps 
     Execute In Container    agent_vpp_1    ip a
     Execute In Container    agent_vpp_2    ip a
 

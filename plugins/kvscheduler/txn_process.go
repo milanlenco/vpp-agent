@@ -26,6 +26,7 @@ import (
 	kvs "github.com/ligato/vpp-agent/plugins/kvscheduler/api"
 	"github.com/ligato/vpp-agent/plugins/kvscheduler/internal/graph"
 	"github.com/ligato/vpp-agent/plugins/kvscheduler/internal/utils"
+	"os"
 )
 
 // transaction represents kscheduler transaction that is being queued/processed.
@@ -83,6 +84,8 @@ type txnResult struct {
 	txnSeqNum uint64
 }
 
+var txnExecEngine = os.Getenv("TXN_EXEC_ENGINE") != ""
+
 // consumeTransactions pulls the oldest queued transaction and starts the processing.
 func (s *Scheduler) consumeTransactions() {
 	defer s.wg.Done()
@@ -129,7 +132,11 @@ func (s *Scheduler) processTransaction(txn *transaction) {
 	var simulatedOps kvs.RecordedTxnOps
 	if !skipSimulation {
 		graphW := s.graph.Write(false, record)
-		simulatedOps = s.executeTransactionBFS(txn, graphW, true)
+		if txnExecEngine {
+			simulatedOps = s.executeTransactionWithEngine(txn, graphW, true)
+		} else {
+			simulatedOps = s.executeTransaction(txn, graphW, true)
+		}
 		if len(simulatedOps) == 0 {
 			// nothing to execute
 			graphW.Save()
@@ -145,7 +152,11 @@ func (s *Scheduler) processTransaction(txn *transaction) {
 	var executedOps kvs.RecordedTxnOps
 	if !skipExec {
 		graphW := s.graph.Write(true, record)
-		executedOps = s.executeTransactionBFS(txn, graphW, false)
+		if txnExecEngine {
+			executedOps = s.executeTransactionWithEngine(txn, graphW, false)
+		} else {
+			executedOps = s.executeTransaction(txn, graphW, false)
+		}
 		graphW.Release()
 	}
 
@@ -311,7 +322,8 @@ func (s *Scheduler) postProcessTransaction(txn *transaction, executed kvs.Record
 	toRetry := utils.NewSliceBasedKeySet()
 	toRefresh := utils.NewSliceBasedKeySet()
 
-	var verboseRefresh bool
+	var afterErrRefresh bool
+	var kvErrors []kvs.KeyWithError
 	graphR := s.graph.Read()
 	for _, op := range executed {
 		node := graphR.GetNode(op.Key)
@@ -325,12 +337,12 @@ func (s *Scheduler) postProcessTransaction(txn *transaction, executed kvs.Record
 		}
 		if state == kvs.ValueState_FAILED {
 			toRefresh.Add(baseKey)
-			verboseRefresh = true
+			afterErrRefresh = true
 		}
 		if state == kvs.ValueState_RETRYING {
 			toRefresh.Add(baseKey)
 			toRetry.Add(baseKey)
-			verboseRefresh = true
+			afterErrRefresh = true
 		}
 		if s.verifyMode {
 			toRefresh.Add(baseKey)
@@ -341,52 +353,15 @@ func (s *Scheduler) postProcessTransaction(txn *transaction, executed kvs.Record
 	// refresh base values which themselves are in a failed state or have derived failed values
 	// - in verifyMode all updated values are re-freshed
 	if toRefresh.Length() > 0 {
-		graphW := s.graph.Write(true,false)
-		s.refreshGraph(graphW, toRefresh, nil, verboseRefresh)
+		// changes brought by refresh triggered solely for the verification are
+		// not saved into the graph
+		graphW := s.graph.Write(afterErrRefresh,false)
+		s.refreshGraph(graphW, toRefresh, nil, afterErrRefresh)
+		s.scheduleRetries(txn, graphW, toRetry)
 
-		// split values based on the retry metadata
-		retryTxns := make(map[retryTxnMeta]*retryTxn)
-		for _, retryKey := range toRetry.Iterate() {
-			node := graphW.GetNode(retryKey)
-			lastUpdate := getNodeLastUpdate(node)
-			// did retry fail?
-			var alreadyRetried bool
-			if txn.txnType == kvs.RetryFailedOps {
-				_, alreadyRetried = txn.retry.keys[retryKey]
-			}
-			// determine how long to delay the retry
-			delay := lastUpdate.retryArgs.Period
-			if alreadyRetried && lastUpdate.retryArgs.ExpBackoff {
-				delay = txn.retry.delay * 2
-			}
-			// determine which attempt this is
-			attempt := 1
-			if alreadyRetried {
-				attempt = txn.retry.attempt + 1
-			}
-			// determine which transaction this retry is for
-			seqNum := txn.seqNum
-			if alreadyRetried {
-				seqNum = txn.retry.txnSeqNum
-			}
-			// add key into the set to retry within a single transaction
-			retryMeta := retryTxnMeta{
-				txnSeqNum: seqNum,
-				delay:     delay,
-				attempt:   attempt,
-			}
-			if _, has := retryTxns[retryMeta]; !has {
-				retryTxns[retryMeta] = &retryTxn{
-					retryTxnMeta: retryMeta,
-					keys:         make(map[string]uint64),
-				}
-			}
-			retryTxns[retryMeta].keys[retryKey] = lastUpdate.txnSeqNum
-		}
-
-		// schedule a series of re-try transactions for failed values
-		for _, retryTxn := range retryTxns {
-			s.enqueueRetry(retryTxn)
+		// if enabled, verify transaction effects
+		if s.verifyMode {
+			kvErrors = s.verifyTransaction(graphW, executed)
 		}
 		graphW.Release()
 	}
@@ -406,63 +381,6 @@ func (s *Scheduler) postProcessTransaction(txn *transaction, executed kvs.Record
 	graphR.Release()
 	// clear the set of updated states
 	s.updatedStates = utils.NewSliceBasedKeySet()
-
-	// if enabled, verify transaction effects
-	var kvErrors []kvs.KeyWithError
-	if s.verifyMode {
-		graphR = s.graph.Read()
-		for _, op := range executed {
-			key := op.Key
-			node := graphR.GetNode(key)
-			if node == nil {
-				continue
-			}
-			state := getNodeState(node)
-			if state == kvs.ValueState_RETRYING || state == kvs.ValueState_FAILED {
-				// effects of failed operations are uncertain and cannot be therefore verified
-				continue
-			}
-			expValue := getNodeLastAppliedValue(node)
-			lastOp := getNodeLastOperation(node)
-			expToNotExist := expValue == nil || state == kvs.ValueState_PENDING || state == kvs.ValueState_INVALID
-			if expToNotExist && isNodeAvailable(node) {
-				kvErrors = append(kvErrors, kvs.KeyWithError{
-					Key:          key,
-					Error:        kvs.NewVerificationError(key, kvs.ExpectedToNotExist),
-					TxnOperation: lastOp,
-				})
-				continue
-			}
-			if expValue == nil {
-				// properly removed
-				continue
-			}
-			if !expToNotExist && !isNodeAvailable(node) {
-				kvErrors = append(kvErrors, kvs.KeyWithError{
-					Key:          key,
-					Error:        kvs.NewVerificationError(key, kvs.ExpectedToExist),
-					TxnOperation: lastOp,
-				})
-				continue
-			}
-			descriptor := s.registry.GetDescriptorForKey(key)
-			handler := newDescriptorHandler(descriptor)
-			equivalent := handler.equivalentValues(key, node.GetValue(), expValue)
-			if !equivalent {
-				kvErrors = append(kvErrors, kvs.KeyWithError{
-					Key:          key,
-					Error:        kvs.NewVerificationError(key, kvs.NotEquivalent),
-					TxnOperation: lastOp,
-				})
-				s.Log.WithFields(
-					logging.Fields{
-						"applied":   expValue,
-						"refreshed": node.GetValue(),
-					}).Warn("Detected non-equivalent applied vs. refreshed values")
-			}
-		}
-		graphR.Release()
-	}
 
 	// build transaction error
 	var txnErr error
@@ -519,6 +437,111 @@ func (s *Scheduler) postProcessTransaction(txn *transaction, executed kvs.Record
 		}
 		graphW.Release()
 	}
+}
+
+// scheduleRetries schedules a series of re-try transactions for failed values
+func (s *Scheduler) scheduleRetries(txn *transaction, graphR graph.ReadAccess, toRetry utils.KeySet,) {
+	// split values based on the retry metadata
+	retryTxns := make(map[retryTxnMeta]*retryTxn)
+	for _, retryKey := range toRetry.Iterate() {
+		node := graphR.GetNode(retryKey)
+		lastUpdate := getNodeLastUpdate(node)
+		// did retry fail?
+		var alreadyRetried bool
+		if txn.txnType == kvs.RetryFailedOps {
+			_, alreadyRetried = txn.retry.keys[retryKey]
+		}
+		// determine how long to delay the retry
+		delay := lastUpdate.retryArgs.Period
+		if alreadyRetried && lastUpdate.retryArgs.ExpBackoff {
+			delay = txn.retry.delay * 2
+		}
+		// determine which attempt this is
+		attempt := 1
+		if alreadyRetried {
+			attempt = txn.retry.attempt + 1
+		}
+		// determine which transaction this retry is for
+		seqNum := txn.seqNum
+		if alreadyRetried {
+			seqNum = txn.retry.txnSeqNum
+		}
+		// add key into the set to retry within a single transaction
+		retryMeta := retryTxnMeta{
+			txnSeqNum: seqNum,
+			delay:     delay,
+			attempt:   attempt,
+		}
+		if _, has := retryTxns[retryMeta]; !has {
+			retryTxns[retryMeta] = &retryTxn{
+				retryTxnMeta: retryMeta,
+				keys:         make(map[string]uint64),
+			}
+		}
+		retryTxns[retryMeta].keys[retryKey] = lastUpdate.txnSeqNum
+	}
+
+	// schedule a series of re-try transactions for failed values
+	for _, retryTxn := range retryTxns {
+		s.enqueueRetry(retryTxn)
+	}
+}
+
+// verifyTransaction verifies if the effect of the transaction is as expected.
+func (s *Scheduler) verifyTransaction(graphR graph.ReadAccess, executed kvs.RecordedTxnOps) (kvErrors []kvs.KeyWithError) {
+	for _, op := range executed {
+		key := op.Key
+		node := graphR.GetNode(key)
+		if node == nil {
+			continue
+		}
+		state := getNodeState(node)
+		if state == kvs.ValueState_RETRYING || state == kvs.ValueState_FAILED {
+			// effects of failed operations are uncertain and cannot be therefore verified
+			continue
+		}
+
+		expValue := getNodeLastAppliedValue(node)
+		lastOp := getNodeLastOperation(node)
+
+		expToNotExist := expValue == nil || state == kvs.ValueState_PENDING || state == kvs.ValueState_INVALID
+		if expToNotExist && isNodeAvailable(node) {
+			kvErrors = append(kvErrors, kvs.KeyWithError{
+				Key:          key,
+				Error:        kvs.NewVerificationError(key, kvs.ExpectedToNotExist),
+				TxnOperation: lastOp,
+			})
+			continue
+		}
+		if expValue == nil {
+			// properly removed
+			continue
+		}
+		if !expToNotExist && !isNodeAvailable(node) {
+			kvErrors = append(kvErrors, kvs.KeyWithError{
+				Key:          key,
+				Error:        kvs.NewVerificationError(key, kvs.ExpectedToExist),
+				TxnOperation: lastOp,
+			})
+			continue
+		}
+		descriptor := s.registry.GetDescriptorForKey(key)
+		handler := newDescriptorHandler(descriptor)
+		equivalent := handler.equivalentValues(key, node.GetValue(), expValue)
+		if !equivalent {
+			kvErrors = append(kvErrors, kvs.KeyWithError{
+				Key:          key,
+				Error:        kvs.NewVerificationError(key, kvs.NotEquivalent),
+				TxnOperation: lastOp,
+			})
+			s.Log.WithFields(
+				logging.Fields{
+					"applied":   expValue,
+					"refreshed": node.GetValue(),
+				}).Warn("Detected non-equivalent applied vs. refreshed values")
+		}
+	}
+	return
 }
 
 // filterNotification checks if the received notification should be filtered

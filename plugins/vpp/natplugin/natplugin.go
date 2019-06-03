@@ -32,9 +32,9 @@ import (
 	"github.com/ligato/vpp-agent/plugins/vpp/natplugin/descriptor"
 	"github.com/ligato/vpp-agent/plugins/vpp/natplugin/vppcalls"
 
-	_ "github.com/ligato/vpp-agent/plugins/vpp/natplugin/vppcalls/vpp1810"
 	_ "github.com/ligato/vpp-agent/plugins/vpp/natplugin/vppcalls/vpp1901"
 	_ "github.com/ligato/vpp-agent/plugins/vpp/natplugin/vppcalls/vpp1904"
+	_ "github.com/ligato/vpp-agent/plugins/vpp/natplugin/vppcalls/vpp1908"
 )
 
 // NATPlugin configures VPP NAT.
@@ -87,7 +87,6 @@ func (p *NATPlugin) Init() error {
 	if err != nil {
 		return err
 	}
-
 
 	return nil
 }

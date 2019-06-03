@@ -29,9 +29,9 @@ import (
 	"github.com/ligato/vpp-agent/plugins/vpp/srplugin/vppcalls"
 	"github.com/pkg/errors"
 
-	_ "github.com/ligato/vpp-agent/plugins/vpp/srplugin/vppcalls/vpp1810"
 	_ "github.com/ligato/vpp-agent/plugins/vpp/srplugin/vppcalls/vpp1901"
 	_ "github.com/ligato/vpp-agent/plugins/vpp/srplugin/vppcalls/vpp1904"
+	_ "github.com/ligato/vpp-agent/plugins/vpp/srplugin/vppcalls/vpp1908"
 )
 
 // SRPlugin configures segment routing.
