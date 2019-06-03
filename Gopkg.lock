@@ -3,7 +3,7 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:833783cac162a09c16538f5ecf6e03f90d8b09babb4d54497a4102a1444b69ea"
+  digest = "1:6699919b652ff92741c506a6873c8eb6f80f3fa377c67b68ecbf800012d709e6"
   name = "git.fd.io/govpp.git"
   packages = [
     "adapter",
@@ -18,7 +18,7 @@
     "examples/bin_api/memclnt",
   ]
   pruneopts = "UT"
-  revision = "6acebecfc33da246685c1cc14b2fc8bc6be3191b"
+  revision = "df781c9bcf64ba93d0ab7ce62573d93c2bf93d4e"
 
 [[projects]]
   branch = "master"
@@ -97,14 +97,6 @@
   pruneopts = "UT"
   revision = "c618e605e15c0d7535f6c96ff8efbb0dba4fd66c"
   version = "v2.1.15"
-
-[[projects]]
-  branch = "master"
-  digest = "1:c3806bfe3d2c9baa0d4ebd90f0a59c7505969bcaab024b5185d20ccd66c9400c"
-  name = "github.com/buger/goterm"
-  packages = ["."]
-  pruneopts = "UT"
-  revision = "6d19e6a8df12fdfc44a90a24b677a6d04a80b91f"
 
 [[projects]]
   branch = "master"
@@ -355,7 +347,7 @@
   version = "v1.1.0"
 
 [[projects]]
-  digest = "1:f5ccd717b5f093cbabc51ee2e7a5979b92f17d217f9031d6d64f337101c408e4"
+  digest = "1:c6e109ed32d266dea072dd6d00e3ee26fb960f86ed0ba7f6a07e5d2bfdeab868"
   name = "github.com/gogo/protobuf"
   packages = [
     "gogoproto",
@@ -389,8 +381,8 @@
     "vanity/command",
   ]
   pruneopts = "T"
-  revision = "4cbf7e384e768b4e01799441fdf2a706a5635ae7"
-  version = "v1.2.0"
+  revision = "ba06b47c162d49f2af050fb4c75bcbc86a159d5c"
+  version = "v1.2.1"
 
 [[projects]]
   digest = "1:a93379ca78a24c7fad97ff3bffdc7f2285ff61f26dd6beedeab0e1391718e95c"
@@ -500,7 +492,7 @@
 
 [[projects]]
   branch = "dev"
-  digest = "1:14123b44f7cd5891c500adedb96f6817f2291e2eb35994dd5952c4bf658625ff"
+  digest = "1:b20db15de753c9aff7d611058a54142ccf122a1065cdf79cf16f1e21108898b7"
   name = "github.com/ligato/cn-infra"
   packages = [
     "agent",
@@ -516,6 +508,11 @@
     "db/keyval/etcd",
     "db/keyval/kvproto",
     "db/keyval/redis",
+    "exec/processmanager",
+    "exec/processmanager/status",
+    "exec/processmanager/template",
+    "exec/processmanager/template/model/process",
+    "exec/supervisor",
     "health/probe",
     "health/statuscheck",
     "health/statuscheck/model/status",
@@ -543,7 +540,7 @@
     "utils/safeclose",
   ]
   pruneopts = "T"
-  revision = "c4fe1a7553d51402cdc59e09460c9b44485f3259"
+  revision = "691b90eac5d48e3d589d7057ce03b1dffdee54fe"
 
 [[projects]]
   branch = "master"
@@ -1000,7 +997,6 @@
     "git.fd.io/govpp.git/api",
     "git.fd.io/govpp.git/cmd/binapi-generator",
     "git.fd.io/govpp.git/core",
-    "github.com/buger/goterm",
     "github.com/coreos/go-iptables/iptables",
     "github.com/fsouza/go-dockerclient",
     "github.com/ghodss/yaml",
@@ -1024,6 +1020,7 @@
     "github.com/ligato/cn-infra/db/keyval/etcd",
     "github.com/ligato/cn-infra/db/keyval/kvproto",
     "github.com/ligato/cn-infra/db/keyval/redis",
+    "github.com/ligato/cn-infra/exec/supervisor",
     "github.com/ligato/cn-infra/health/probe",
     "github.com/ligato/cn-infra/health/statuscheck",
     "github.com/ligato/cn-infra/health/statuscheck/model/status",

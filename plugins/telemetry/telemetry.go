@@ -17,6 +17,7 @@ package telemetry
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -28,9 +29,9 @@ import (
 	"github.com/ligato/vpp-agent/plugins/govppmux"
 	"github.com/ligato/vpp-agent/plugins/telemetry/vppcalls"
 
-	_ "github.com/ligato/vpp-agent/plugins/telemetry/vppcalls/vpp1810"
 	_ "github.com/ligato/vpp-agent/plugins/telemetry/vppcalls/vpp1901"
 	_ "github.com/ligato/vpp-agent/plugins/telemetry/vppcalls/vpp1904"
+	_ "github.com/ligato/vpp-agent/plugins/telemetry/vppcalls/vpp1908"
 )
 
 const (
@@ -39,6 +40,8 @@ const (
 	// minimum period between updates
 	minimumUpdatePeriod = time.Second * 1
 )
+
+var debug = os.Getenv("DEBUG_TELEMETRY") != ""
 
 // Plugin registers Telemetry Plugin
 type Plugin struct {
