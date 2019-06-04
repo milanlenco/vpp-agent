@@ -38,8 +38,8 @@ type kvContext struct {
 	newMetadata kvs.Metadata
 	origin      kvs.ValueOrigin
 
-	node        graph.NodeRW
-	descriptor  *descriptorHandler
+	node       graph.NodeRW
+	descriptor *descriptorHandler
 
 	isDerived   bool
 	isDepUpdate bool
@@ -97,18 +97,12 @@ func (s *Scheduler) executeTransactionWithEngine(txn *transaction, graphW graph.
 	return executed
 }
 
-// PrepareTxnOperation should determine whether to:
-//  - proceed with operation execution
-//  - skip operation execution (skip directly to Finalization)
-//  - wait for some other key-value pairs (of the same transaction) to
-//    be changed first (when those values are finalized, preparation for this
-//    value change will be replayed)
-// Furthermore, the underlying graph (abstracted-away at this level) should
-// be updated to reflect the value change.
-func (s *Scheduler) PrepareTxnOperation(opTxnCtx exec.OpaqueCtx, kv *exec.KVChange, isRevert bool) (
-	prevValue proto.Message, skipExec bool, waitFor utils.KeySet, err error) {
+// PrepareTxnOperation should update the underlying graph (abstracted-away
+// at this level) to reflect the value change.
+func (s *Scheduler) PrepareTxnOperation(txnPrivCtx exec.OpaqueCtx, kv *exec.KVChange, isRevert bool) (
+	prevValue proto.Message) {
 
-	txnCtx := opTxnCtx.(*txnContext)
+	txnCtx := txnPrivCtx.(*txnContext)
 	kvCtx := kv.Context.(*kvContext)
 
 	// obtain descriptor for the key
@@ -131,13 +125,8 @@ func (s *Scheduler) PrepareTxnOperation(opTxnCtx exec.OpaqueCtx, kv *exec.KVChan
 	kvCtx.prevDetails = getValueDetails(kvCtx.node)
 
 	// determine the operation type
-	if kvCtx.isDepUpdate {
+	if kv.KeepValue {
 		kvCtx.operation = s.determineDepUpdateOperation(kvCtx.node)
-		if kvCtx.operation == kvs.TxnOperation_UNDEFINED {
-			// nothing needs to be updated
-			skipExec = true
-			return
-		}
 	} else if kv.NewValue == nil {
 		kvCtx.operation = kvs.TxnOperation_DELETE
 	} else if kvCtx.node.GetValue() == nil || !isNodeAvailable(kvCtx.node) {
@@ -185,34 +174,55 @@ func (s *Scheduler) PrepareTxnOperation(opTxnCtx exec.OpaqueCtx, kv *exec.KVChan
 	// prepare for the selected operation
 	switch kvCtx.operation {
 	case kvs.TxnOperation_DELETE:
-		skipExec, waitFor, err = s.prepareForDelete(txnCtx, kv, kvCtx, isRevert)
+		skipExec, waitFor = s.prepareForDelete(txnCtx, kv, kvCtx, isRevert)
 	case kvs.TxnOperation_CREATE:
-		skipExec, waitFor, err = s.prepareForCreate(txnCtx, kv, kvCtx, isRevert)
+		skipExec, waitFor = s.prepareForCreate(txnCtx, kv, kvCtx, isRevert)
 	case kvs.TxnOperation_UPDATE:
-		skipExec, waitFor, err = s.prepareForUpdate(txnCtx, kv, kvCtx, isRevert)
+		skipExec, waitFor = s.prepareForUpdate(txnCtx, kv, kvCtx, isRevert)
 	}
 	return
 }
 
 func (s *Scheduler) prepareForDelete(txnCtx *txnContext, kv *exec.KVChange, kvCtx *kvContext, isRevert bool) (
-	skipExec bool, waitFor utils.KeySet, err error) {
+	skipExec bool, waitFor utils.KeySet) {
 
 	// TODO
 	return
 }
 
 func (s *Scheduler) prepareForCreate(txnCtx *txnContext, kv *exec.KVChange, kvCtx *kvContext, isRevert bool) (
-	skipExec bool, waitFor utils.KeySet, err error) {
+	skipExec bool, waitFor utils.KeySet) {
 
 	// TODO
 	return
 }
 
 func (s *Scheduler) prepareForUpdate(txnCtx *txnContext, kv *exec.KVChange, kvCtx *kvContext, isRevert bool) (
-	skipExec bool, waitFor utils.KeySet, err error) {
+	skipExec bool, waitFor utils.KeySet) {
 
 	// TODO
 	return
+}
+
+// IsTxnOperationReady should determine whether to:
+//  - proceed with operation execution
+//  - skip operation execution (skip directly to Finalization without interruption)
+//  - wait for some other key-value pairs (of the same transaction) to
+//    be changed first - once those values are finalized, the readiness
+//    check is repeated and the value change process continues accordingly
+//  - block (freeze) some other values from entering the state machine while
+//    this value is waiting/being executed (unfrozen when finalized)
+func (s *Scheduler) IsTxnOperationReady(txnPrivCtx exec.OpaqueCtx, kv *exec.KVChange) (
+	skipExec bool, precededBy []exec.KVChange, freeze utils.KeySet) {
+
+	//txnCtx := txnPrivCtx.(*txnContext)
+	//kvCtx := kv.Context.(*kvContext)
+
+	// TODO
+
+	// UNDEFINED operation => skip
+
+	return false, nil, nil
 }
 
 // ExecuteTxnOperation is run from another go routine by one of the workers.
@@ -230,17 +240,17 @@ func (s *Scheduler) ExecuteTxnOperation(workerID int, kv *exec.KVChange) (err er
 		kvCtx.newMetadata, err = kvCtx.descriptor.update(
 			node.GetKey(), kvCtx.prevValue, node.GetValue(), node.GetMetadata())
 	}
-	return nil
+	return err
 }
 
 // FinalizeTxnOperation is run after the operation has been executed/skipped.
 // Some more key-value pair may be requested to be changed as a consequence
-// (follow-ups).
-func (s *Scheduler) FinalizeTxnOperation(opTxnCtx exec.OpaqueCtx, kv *exec.KVChange,
+// (followUp).
+func (s *Scheduler) FinalizeTxnOperation(txnPrivCtx exec.OpaqueCtx, kv *exec.KVChange,
 	wasRevert bool, opRetval error) (followUp []exec.KVChange) {
 
 	// TODO - don't forget about all the skips and new metadata
-	txnCtx := opTxnCtx.(*txnContext)
+	txnCtx := txnPrivCtx.(*txnContext)
 	kvCtx := kv.Context.(*kvContext)
 
 	// detect value state changes
@@ -257,7 +267,7 @@ func (s *Scheduler) FinalizeTxnOperation(opTxnCtx exec.OpaqueCtx, kv *exec.KVCha
 
 // PrepareForTxnRevert is run before reverting of already applied key-value
 // changes is started (due to error(s)).
-func (s *Scheduler) PrepareForTxnRevert(opTxnCtx exec.OpaqueCtx, failedKVChanges utils.KeySet) {
-	txnCtx := opTxnCtx.(*txnContext)
+func (s *Scheduler) PrepareForTxnRevert(txnPrivCtx exec.OpaqueCtx, failedKVChanges utils.KeySet) {
+	txnCtx := txnPrivCtx.(*txnContext)
 	s.refreshGraph(txnCtx.graphW, failedKVChanges, nil, true)
 }

@@ -108,8 +108,10 @@ type TxnExecHandler interface {
 	//  - wait for some other key-value pairs (of the same transaction) to
 	//    be changed first - once those values are finalized, the readiness
 	//    check is repeated and the value change process continues accordingly
+	//  - block (freeze) some other values from entering the state machine while
+	//    this value is waiting/being executed (unfrozen when finalized)
 	IsTxnOperationReady(txnCtx OpaqueCtx, kv *KVChange) (
-		skipExec bool, precededBy []KVChange, waitFor utils.KeySet)
+		skipExec bool, precededBy []KVChange, freeze utils.KeySet)
 
 	// ExecuteTxnOperation is run from another go routine by one of the workers.
 	// The method should apply the value change (call Create/Delete/Update on the
@@ -118,7 +120,7 @@ type TxnExecHandler interface {
 
 	// FinalizeTxnOperation is run after the operation has been executed/skipped.
 	// Some more key-value pair may be requested to be changed as a consequence
-	// (followedBy).
+	// (followUp).
 	FinalizeTxnOperation(txnCtx OpaqueCtx, kv *KVChange, wasRevert bool, opRetval error) (
 		followedBy[]KVChange)
 
@@ -158,3 +160,24 @@ func (e *txnExecEngine) Close() error {
 	// TODO
 	return nil
 }
+
+
+// TODO: couple of notes:
+// - every value should be changed only at most once within a transaction - other
+//   operations should be dependency updates
+//   - add assertion to panic if this is not satisfied
+// - the value should not be in the queue more than once
+//    - value change overwrites dependency update
+//    - multiple planned dependency updates are pointless
+//    - dependency update is basically already included in the value change
+// - if the value is already being executed or is waiting, another operation
+//   should be blocked - i.e. add "blocked" queue - and re-enqueued ASAP to the
+//   front (regardless whether BFS or DFS is being used as it was already decided
+//   to do that operation at the given moment, but it had to be blocked)
+// - whether to use DFS or BFS is from the functional point irrelevant
+// - graph updates will be done in the preparation phase - that means, however,
+//   that all the related values must be "blocked" (frozen - chose one of these words)
+//    - those which are already being updated will be waited for (and not allowed to
+//      re-enter), others will simply not be allowed to be enqueued
+//    - frozen values will will be put into the "blocked" queue
+//    - frozen until the value that froze them is finalized

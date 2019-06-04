@@ -60,9 +60,13 @@ enum ValueState {
     // then transit to the FAILED state.
     RETRYING = 10;
 
-    // Create/Update/Delete operation, executed asynchronously from another go
-    // routine.
-    INPROGRESS = 11;
+    // ValueState_WAITING marks value which is waiting for another value within
+    // the same transaction to be processed first (KVScheduler internal state).
+    WAITING = 11;
+
+    // ValueState_INPROGRESS marks value that is being Created/Updated/Deleted
+    // asynchronously from another go routine (KVScheduler internal state).
+    INPROGRESS = 12;
 }
 
 enum TxnOperation {
