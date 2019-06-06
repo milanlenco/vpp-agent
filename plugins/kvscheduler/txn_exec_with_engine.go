@@ -16,6 +16,7 @@ package kvscheduler
 
 import (
 	"runtime/trace"
+	"time"
 
 	"github.com/gogo/protobuf/proto"
 	kvs "github.com/ligato/vpp-agent/plugins/kvscheduler/api"
@@ -24,6 +25,7 @@ import (
 	"github.com/ligato/vpp-agent/plugins/kvscheduler/internal/utils"
 )
 
+// context associated with a running transaction
 type txnContext struct {
 	*transaction
 	graphW   graph.RWAccess
@@ -31,26 +33,39 @@ type txnContext struct {
 	executed kvs.RecordedTxnOps
 }
 
+// context associated with an in-progress key-value pair update
 type kvContext struct {
+	// input
 	baseKey     string
 	operation   kvs.TxnOperation
 	metadata    kvs.Metadata
-	newMetadata kvs.Metadata
 	origin      kvs.ValueOrigin
 
+	// output
+	newMetadata kvs.Metadata
+	opRecord   *kvs.RecordedTxnOp
+
+	// handlers
 	node       graph.NodeRW
 	descriptor *descriptorHandler
 
-	isDerived   bool
-	isDepUpdate bool
+	// flags
+	isDerived  bool
+	isRecreate bool
+	isRetry    bool
 
-	// previous value state
+	// previous value state - for FinalizeTxnOperation
 	prevValue   proto.Message
 	prevUpdate  *LastUpdateFlag
 	prevState   kvs.ValueState
 	prevOp      kvs.TxnOperation
 	prevErr     string
 	prevDetails []string
+
+	// for ExecuteTxnOperation
+	dryExec   bool
+	execStart time.Time
+	execStop  time.Time
 }
 
 // executeTransactionWithEngine executes pre-processed transaction.
@@ -85,6 +100,7 @@ func (s *Scheduler) executeTransactionWithEngine(txn *transaction, graphW graph.
 				baseKey:  kv.key,
 				metadata: kv.metadata,
 				origin:   kv.origin,
+				isRetry:  txn.txnType == kvs.RetryFailedOps,
 			},
 		})
 	}
@@ -98,7 +114,7 @@ func (s *Scheduler) executeTransactionWithEngine(txn *transaction, graphW graph.
 }
 
 // PrepareTxnOperation should update the underlying graph (abstracted-away
-// at this level) to reflect the value change.
+// at this level) to reflect the requested value change.
 func (s *Scheduler) PrepareTxnOperation(txnPrivCtx exec.OpaqueCtx, kv *exec.KVChange, isRevert bool) (
 	prevValue proto.Message) {
 
@@ -124,9 +140,15 @@ func (s *Scheduler) PrepareTxnOperation(txnPrivCtx exec.OpaqueCtx, kv *exec.KVCh
 	kvCtx.prevErr = getNodeErrorString(kvCtx.node)
 	kvCtx.prevDetails = getValueDetails(kvCtx.node)
 
+	// prepare operation description - fill attributes that we can even before
+	// executing the operation
+	kvCtx.opRecord = s.preRecordTxnOp2(kv, kvCtx, isRevert)
+
 	// determine the operation type
+	// TODO: take into consideration multiple sources
+	//  - create/delete can actually result in Update
 	if kv.KeepValue {
-		kvCtx.operation = s.determineDepUpdateOperation(kvCtx.node)
+		kvCtx.operation = kvs.TxnOperation_UNDEFINED // determined in IsTxnOperationReady
 	} else if kv.NewValue == nil {
 		kvCtx.operation = kvs.TxnOperation_DELETE
 	} else if kvCtx.node.GetValue() == nil || !isNodeAvailable(kvCtx.node) {
@@ -134,13 +156,21 @@ func (s *Scheduler) PrepareTxnOperation(txnPrivCtx exec.OpaqueCtx, kv *exec.KVCh
 	} else {
 		kvCtx.operation = kvs.TxnOperation_UPDATE
 	}
+	if txnCtx.dryRun {
+		// do not actually execute the operation, just pretend
+		kvCtx.dryExec = true
+	}
 
 	// update the lastUpdate flag
 	lastUpdateFlag := &LastUpdateFlag{
 		txnSeqNum: txnCtx.seqNum,
 		txnOp:     kvCtx.operation,
-		value:     kv.NewValue,
 		revert:    isRevert,
+	}
+	if kv.KeepValue {
+		lastUpdateFlag.value = prevValue
+	} else {
+		lastUpdateFlag.value = kv.NewValue
 	}
 	if txnCtx.txnType == kvs.NBTransaction {
 		lastUpdateFlag.retryEnabled = txnCtx.nb.retryEnabled
@@ -164,9 +194,9 @@ func (s *Scheduler) PrepareTxnOperation(txnPrivCtx exec.OpaqueCtx, kv *exec.KVCh
 	// if the value is already "broken" by this transaction, do not try to update
 	// anymore, unless this is a revert
 	// (needs to be refreshed first in the post-processing stage)
-	if (kvCtx.prevState == kvs.ValueState_FAILED || kvCtx.prevState == kvs.ValueState_RETRYING) &&
-		!isRevert && kvCtx.prevUpdate != nil && kvCtx.prevUpdate.txnSeqNum == txnCtx.seqNum {
-		_, err = getNodeError(kvCtx.node)
+	failingValue := kvCtx.prevState == kvs.ValueState_FAILED || kvCtx.prevState == kvs.ValueState_RETRYING
+	updatedByThisTxn := kvCtx.prevUpdate != nil && kvCtx.prevUpdate.txnSeqNum == txnCtx.seqNum
+	if failingValue && !isRevert && updatedByThisTxn {
 		skipExec = true
 		return
 	}
@@ -174,31 +204,59 @@ func (s *Scheduler) PrepareTxnOperation(txnPrivCtx exec.OpaqueCtx, kv *exec.KVCh
 	// prepare for the selected operation
 	switch kvCtx.operation {
 	case kvs.TxnOperation_DELETE:
-		skipExec, waitFor = s.prepareForDelete(txnCtx, kv, kvCtx, isRevert)
+		s.prepareForDelete(txnCtx, kv, kvCtx, isRevert)
 	case kvs.TxnOperation_CREATE:
-		skipExec, waitFor = s.prepareForCreate(txnCtx, kv, kvCtx, isRevert)
+		skipExec = s.prepareForCreate(txnCtx, kv, kvCtx, isRevert)
 	case kvs.TxnOperation_UPDATE:
-		skipExec, waitFor = s.prepareForUpdate(txnCtx, kv, kvCtx, isRevert)
+		s.prepareForUpdate(txnCtx, kv, kvCtx, isRevert)
 	}
 	return
 }
 
-func (s *Scheduler) prepareForDelete(txnCtx *txnContext, kv *exec.KVChange, kvCtx *kvContext, isRevert bool) (
-	skipExec bool, waitFor utils.KeySet) {
+func (s *Scheduler) prepareForDelete(txnCtx *txnContext, kv *exec.KVChange, kvCtx *kvContext, isRevert bool) {
 
 	// TODO
 	return
 }
 
-func (s *Scheduler) prepareForCreate(txnCtx *txnContext, kv *exec.KVChange, kvCtx *kvContext, isRevert bool) (
-	skipExec bool, waitFor utils.KeySet) {
+func (s *Scheduler) prepareForCreate(txnCtx *txnContext, kv *exec.KVChange, kvCtx *kvContext, isRevert bool) (skipExec bool) {
+	node := kvCtx.node
 
 	// TODO
+
+	// add descriptor flag
+	if !kvCtx.descriptor.isNil() {
+		node.SetFlags(&DescriptorFlag{kvCtx.descriptor.name()})
+		node.SetLabel(kvCtx.descriptor.keyLabel(kv.Key))
+	}
+
+	// mark derived value
+	if kvCtx.isDerived {
+		kvCtx.node.SetFlags(&DerivedFlag{baseKey: kvCtx.baseKey})
+	}
+
+	// handle unimplemented value
+	unimplemented := kvCtx.origin == kvs.FromNB && !kvCtx.isDerived && kvCtx.descriptor.isNil()
+	if unimplemented {
+		skipExec = true
+		if getNodeState(kvCtx.node) == kvs.ValueState_UNIMPLEMENTED {
+			// already known
+			return
+		}
+		node.SetFlags(&UnavailValueFlag{})
+		node.DelFlags(ErrorFlagIndex)
+		kvCtx.opRecord.NOOP = true
+		kvCtx.opRecord.NewState = kvs.ValueState_UNIMPLEMENTED
+		s.updateNodeState(node, kvCtx.opRecord, args)
+		return
+	}
+
+	// TODO: node.SetValue() should use merge of all values from all sources of this KV
+
 	return
 }
 
-func (s *Scheduler) prepareForUpdate(txnCtx *txnContext, kv *exec.KVChange, kvCtx *kvContext, isRevert bool) (
-	skipExec bool, waitFor utils.KeySet) {
+func (s *Scheduler) prepareForUpdate(txnCtx *txnContext, kv *exec.KVChange, kvCtx *kvContext, isRevert bool) {
 
 	// TODO
 	return
@@ -206,7 +264,6 @@ func (s *Scheduler) prepareForUpdate(txnCtx *txnContext, kv *exec.KVChange, kvCt
 
 // IsTxnOperationReady should determine whether to:
 //  - proceed with operation execution
-//  - skip operation execution (skip directly to Finalization without interruption)
 //  - wait for some other key-value pairs (of the same transaction) to
 //    be changed first - once those values are finalized, the readiness
 //    check is repeated and the value change process continues accordingly
@@ -216,11 +273,14 @@ func (s *Scheduler) IsTxnOperationReady(txnPrivCtx exec.OpaqueCtx, kv *exec.KVCh
 	skipExec bool, precededBy []exec.KVChange, freeze utils.KeySet) {
 
 	//txnCtx := txnPrivCtx.(*txnContext)
-	//kvCtx := kv.Context.(*kvContext)
+	kvCtx := kv.Context.(*kvContext)
 
 	// TODO
 
-	// UNDEFINED operation => skip
+	if kvCtx.operation == kvs.TxnOperation_UNDEFINED {
+		kvCtx.operation = s.determineDepUpdateOperation(kvCtx.node)
+		getNodeLastUpdate(kvCtx.node).txnOp = kvCtx.operation
+	}
 
 	return false, nil, nil
 }
@@ -231,6 +291,13 @@ func (s *Scheduler) IsTxnOperationReady(txnPrivCtx exec.OpaqueCtx, kv *exec.KVCh
 func (s *Scheduler) ExecuteTxnOperation(workerID int, kv *exec.KVChange) (err error) {
 	kvCtx := kv.Context.(*kvContext)
 	node := kvCtx.node
+
+	kvCtx.execStart = time.Now()
+	defer func() { kvCtx.execStop = time.Now() }()
+
+	if kvCtx.dryExec {
+		return nil
+	}
 	switch kvCtx.operation {
 	case kvs.TxnOperation_DELETE:
 		err = kvCtx.descriptor.delete(node.GetKey(), node.GetValue(), node.GetMetadata())
@@ -249,7 +316,7 @@ func (s *Scheduler) ExecuteTxnOperation(workerID int, kv *exec.KVChange) (err er
 func (s *Scheduler) FinalizeTxnOperation(txnPrivCtx exec.OpaqueCtx, kv *exec.KVChange,
 	wasRevert bool, opRetval error) (followUp []exec.KVChange) {
 
-	// TODO - don't forget about all the skips and new metadata
+	// TODO - don't forget about all the skips (unimplemented, SB) and new metadata
 	txnCtx := txnPrivCtx.(*txnContext)
 	kvCtx := kv.Context.(*kvContext)
 

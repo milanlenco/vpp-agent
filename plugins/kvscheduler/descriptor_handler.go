@@ -42,6 +42,17 @@ func newDescriptorHandler(descr *kvs.KVDescriptor) *descriptorHandler {
 	}
 }
 
+func (h *descriptorHandler) isNil() bool {
+	return h.descriptor == nil
+}
+
+func (h *descriptorHandler) name() string {
+	if h.descriptor == nil {
+		return ""
+	}
+	return h.descriptor.Name
+}
+
 // keyLabel by default returns the key itself.
 func (h *descriptorHandler) keyLabel(key string) string {
 	if h.descriptor == nil || h.descriptor.KeyLabel == nil {

@@ -227,3 +227,18 @@ func (flag *DerivedFlag) GetName() string {
 func (flag *DerivedFlag) GetValue() string {
 	return flag.baseKey
 }
+
+
+/*
+TODO - value merging
+
+- last-update flag?
+	- used to find out if NB wants a node to be deleted (but fails)
+    - in verification to get desired value, which for the node may be overshadowed by refresh
+    - to remember last operation (OK for merging)
+
+
+
+
+
+ */

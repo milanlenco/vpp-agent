@@ -15,8 +15,11 @@
 package exec_engine
 
 import (
+	"fmt"
+
 	"github.com/gogo/protobuf/proto"
 	"github.com/ligato/vpp-agent/plugins/kvscheduler/internal/utils"
+	kvs "github.com/ligato/vpp-agent/plugins/kvscheduler/api"
 )
 
 // KVChange represents a key-value pair which is being / going to be changed
@@ -24,6 +27,7 @@ import (
 type KVChange struct {
 	Key       string
 	NewValue  proto.Message
+	Source    KVSource
 
 	// Keep the current value, just re-check the state (dependencies, etc.) and
 	// act accordingly. If enabled, NewValue should be ignored by TxnExecHandler.
@@ -33,8 +37,30 @@ type KVChange struct {
 	Context OpaqueCtx
 }
 
+// KVSource identifies the source of the value being applied.
+// Note: value is allowed to have multiple sources.
+type KVSource struct {
+	Origin      kvs.ValueOrigin
+	DerivedFrom string
+}
+
 // OpaqueCtx is used to plug arbitrary data into the execution context.
 type OpaqueCtx interface{}
+
+// AsyncExecError can be returned by ExecuteTxnOperation to tell the engine
+// that the executed operation will continue asynchronously in the background.
+// The operation execution will be resumed (repeated with the given checkpoint)
+// once ResumeAsyncOperation is called for the given key.
+type AsyncExecError struct {
+	Checkpoint int
+}
+
+// Error returns a string representation of AsyncExecError.
+func (e *AsyncExecError) Error() string {
+	return fmt.Sprintf("operation continues asynchronously after reaching checkpoint: %d",
+		e.Checkpoint)
+}
+
 
 // TxnExecEngine is the interface of the transaction execution engine.
 // It is a state machine on top of which the transaction operation scheduling is
@@ -66,6 +92,10 @@ type OpaqueCtx interface{}
 //  3. Execution:
 //      - run by one of the workers (i.e. different go routine)
 //      - the underlying handler is supposed to execute the given operation
+//      - the operation execution may be even send into the background to continue
+//        asynchronously (typically to avoid the worker go routine to be suspended
+//        while waiting for an external event) and resumed to continue from the
+//        given checkpoint
 //  4. Finalization:
 //      - the underlying handler is supposed to:
 //          - update the corresponding graph node to reflect the operation return
@@ -86,6 +116,15 @@ type TxnExecEngine interface {
 	// change requests.
 	RunTransaction(txnCtx OpaqueCtx, input []KVChange, withRevert bool)
 
+	// ResumeAsyncOperation signals the execution engine to continue with
+	// the execution for the ongoing asynchronous operation associated with the
+	// given key.
+	// if <done> is true, the operation will not be resumed and instead it will
+	// be considered as done with the given error. In any case a non-nil <err>
+	// stops the execution and the received error is forwarded to the main thread
+	// of the execution handler to be processed in FinalizeTxnOperation.
+	ResumeAsyncOperation(key string, done bool, err error)
+
 	// Close stops all the worker go routines.
 	Close() error
 }
@@ -99,30 +138,43 @@ type TxnExecHandler interface {
 	//// KV Change Processing:
 
 	// PrepareTxnOperation should update the underlying graph (abstracted-away
-	// at this level) to reflect the value change.
+	// at this level) to reflect the requested value change.
+	// It also possible to skip operation execution and order the execution engine
+	// to move directly to Finalization without interruption.
+	// prevValue is the previous value as set by the given source (i.e. for merged
+	// value it is the previous value only for that single source).
 	PrepareTxnOperation(txnCtx OpaqueCtx, kv *KVChange, isRevert bool) (prevValue proto.Message)
 
 	// IsTxnOperationReady should determine whether to:
-	//  - proceed with operation execution
-	//  - skip operation execution (skip directly to Finalization without interruption)
+	//  - proceed with operation execution or skip the execution and order
+	//    the execution engine to move to Finalization without any (additional)
+	//    interruption.
 	//  - wait for some other key-value pairs (of the same transaction) to
-	//    be changed first - once those values are finalized, the readiness
-	//    check is repeated and the value change process continues accordingly
+	//    be changed/checked first - once those values are finalized, the readiness
+	//    check is repeated (skipping the values from precededBy which were already
+	//    processed) and the value change process continues accordingly
 	//  - block (freeze) some other values from entering the state machine while
-	//    this value is waiting/being executed (unfrozen when finalized)
+	//    this value is waiting/being executed (unfrozen when finalized) - if values
+	//    to be frozen are still in-progress, they will be finalized first (unless
+	//    this operation is preceding them)
 	IsTxnOperationReady(txnCtx OpaqueCtx, kv *KVChange) (
 		skipExec bool, precededBy []KVChange, freeze utils.KeySet)
 
 	// ExecuteTxnOperation is run from another go routine by one of the workers.
 	// The method should apply the value change (call Create/Delete/Update on the
 	// associated descriptor) and return error if the operation failed.
-	ExecuteTxnOperation(workerID int, kv *KVChange) (err error)
+	// Special error value AsyncExecError can be returned to signal the execution
+	// engine that the operation will continue in the background (e.g. due
+	// to a blocking action) and should be resumed (repeated with the checkpoint
+	// given in the error) once signaled through the ResumeAsyncOperation()
+	// method of the execution engine.
+	ExecuteTxnOperation(workerID, checkpoint int, kv *KVChange) (err error)
 
 	// FinalizeTxnOperation is run after the operation has been executed/skipped.
 	// Some more key-value pair may be requested to be changed as a consequence
 	// (followUp).
 	FinalizeTxnOperation(txnCtx OpaqueCtx, kv *KVChange, wasRevert bool, opRetval error) (
-		followedBy[]KVChange)
+		followedBy []KVChange)
 
 	//// Revert:
 
@@ -155,6 +207,17 @@ func (e *txnExecEngine) RunTransaction(txnCtx OpaqueCtx, input []KVChange, withR
 	// TODO
 }
 
+// ResumeAsyncOperation signals the execution engine to continue with
+// the execution for the ongoing asynchronous operation associated with the
+// given key.
+// if <done> is true, the operation will not be resumed and instead it will
+// be considered as done with the given error. In any case a non-nil <err>
+// stops the execution and the received error is forwarded to the main thread
+// of the execution handler to be processed in FinalizeTxnOperation.
+func (e *txnExecEngine) ResumeAsyncOperation(key string, done bool, err error) {
+	// TODO
+}
+
 // Close stops all the worker go routines.
 func (e *txnExecEngine) Close() error {
 	// TODO
@@ -179,5 +242,86 @@ func (e *txnExecEngine) Close() error {
 //   that all the related values must be "blocked" (frozen - chose one of these words)
 //    - those which are already being updated will be waited for (and not allowed to
 //      re-enter), others will simply not be allowed to be enqueued
-//    - frozen values will will be put into the "blocked" queue
+//    - frozen values will be put into the "blocked" queue
 //    - frozen until the value that froze them is finalized
+// - blocking will be used to cover:
+//    - dependencies which are being executed
+//    - dependencies which are waiting
+//    - dependencies which are not in-progress, but could in theory overtake the values
+//      that depend on them (slower worker)
+//    - (not really needed) maybe freeze also parent values (i.e. implicit dependencies)
+// - the relation is-preceded-by implies is-frozen-by, i.e:
+//    - A -deps-> B -deps-> C
+//    - delete of C is preceded by dep-update of B
+//    - delete of B is preceded by dep-update of A + C is frozen (NOOP, already frozen implicitly)
+//    - delete of A freezes B, C (both NOOP, already frozen implicitly - run transitive closure)
+// - error during execution should be processed with priority
+// - the size of the queue for the execution should be a multiple of the worker count
+// - Create/Update/Delete operation walk-through:
+//    - Create
+//       - Prepare:
+//          - add node with unavailable flag
+//          - add relations
+//          - skip exec if some dependency is missing
+//       - IsReady:
+//          - freeze dependencies
+//       - Execute:
+//          - Create the thing
+//       - Finalize
+//          - mark node as available
+//          - followed up by the creation of derived values
+//    - Delete
+//       - Prepare:
+//          - mark node as unavailable
+//       - IsReady:
+//          - preceded by removal of derived values and dependency check of values
+//            that depend on it
+//       - Execute:
+//          - Delete the thing
+//       - Finalize
+//          - remove node from the graph
+//    - Update (not re-create)
+//       - Prepare:
+//          - determine if equivalent and whether to re-create
+//          - without changing relations, determine the set of obsolete, new
+//            derived values and dependencies
+//          - if some dependency is missing select Delete operation (write to context)
+//             - mark node as unavailable
+//       - IsReady:
+//          - If to-be Updated
+//             - freeze obsolete and new dependencies
+//             - preceded by removal of post-update obsolete derived values
+//          - else: (to-be deleted)
+//             - preceded by removal of derived values and dependency check of values
+//               that depend on it
+//       - Execute:
+//          - Delete or Update the thing
+//       - Finalize
+//          - update relations
+//          - if was Update:
+//             - followed up by the creation of derived values
+//          - else (deleted)
+//             - update relations
+//    - Update with re-create
+//       - 1st round:
+//          - Prepare:
+//              - determine if equivalent and whether to re-create
+//              - mark node as unavailable
+//          - IsReady:
+//              - preceded by removal of derived values and dependency check of values
+//                that depend on it
+//          - Execute:
+//              - Delete the thing
+//          - Finalize
+//              - followed by Create for this key and the new value
+//       - 2nd round:
+//          - Prepare:
+//              - update relations
+//              - skip exec if some dependency is missing
+//          - IsReady:
+//              - freeze dependencies
+//          - Execute:
+//              - Create the thing
+//          - Finalize
+//              - mark node as available
+//              - followed up by the creation of derived values
