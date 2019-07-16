@@ -180,12 +180,14 @@ func (p *IfPlugin) Init() error {
 		p.ifHandler, p.intfIndex, p.Log)
 	linkStateDescriptor, p.linkStateDescriptor = descriptor.NewLinkStateDescriptor(
 		p.KVScheduler, p.ifHandler, p.intfIndex, p.Log)
+
 	rxModeDescriptor := descriptor.NewRxModeDescriptor(p.ifHandler, p.intfIndex, p.Log)
 	rxPlacementDescriptor := descriptor.NewRxPlacementDescriptor(p.ifHandler, p.intfIndex, p.Log)
 	addrDescriptor := descriptor.NewInterfaceAddressDescriptor(p.ifHandler, p.intfIndex, p.Log)
 	unIfDescriptor := descriptor.NewUnnumberedIfDescriptor(p.ifHandler, p.intfIndex, p.Log)
 	bondIfDescriptor, _ := descriptor.NewBondedInterfaceDescriptor(p.ifHandler, p.intfIndex, p.Log)
 	vrfDescriptor := descriptor.NewInterfaceVrfDescriptor(p.ifHandler, p.intfIndex, p.Log)
+	withAddrDescriptor := descriptor.NewInterfaceWithAddrDescriptor(p.Log)
 
 	err = p.KVScheduler.RegisterKVDescriptor(
 		dhcpDescriptor,
@@ -196,6 +198,7 @@ func (p *IfPlugin) Init() error {
 		unIfDescriptor,
 		bondIfDescriptor,
 		vrfDescriptor,
+		withAddrDescriptor,
 	)
 	if err != nil {
 		return err
@@ -217,12 +220,13 @@ func (p *IfPlugin) Init() error {
 		go p.watchStatusEvents()
 	}
 
+	// start interface state updater
+	p.ifStateChan = make(chan *interfaces.InterfaceNotification, 1000)
+
 	// start interface state publishing
 	p.wg.Add(1)
 	go p.publishIfStateEvents()
 
-	// start interface state updater
-	p.ifStateChan = make(chan *interfaces.InterfaceNotification, 1000)
 	// Interface state updater
 	p.ifStateUpdater = &InterfaceStateUpdater{}
 

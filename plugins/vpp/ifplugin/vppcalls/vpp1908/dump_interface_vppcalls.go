@@ -426,10 +426,12 @@ func (h *InterfaceVppHandler) processIPDetails(ifs map[uint32]*vppcalls.Interfac
 	}
 
 	var ipAddr string
-	if ipDetails.IsIPv6 == 1 {
-		ipAddr = fmt.Sprintf("%s/%d", net.IP(ipDetails.IP).To16().String(), uint32(ipDetails.PrefixLength))
+	ipByte := make([]byte, 16)
+	copy(ipByte[:], ipDetails.Prefix.Address.Un.XXX_UnionData[:])
+	if ipDetails.Prefix.Address.Af == ip.ADDRESS_IP6 {
+		ipAddr = fmt.Sprintf("%s/%d", net.IP(ipByte).To16().String(), uint32(ipDetails.Prefix.Len))
 	} else {
-		ipAddr = fmt.Sprintf("%s/%d", net.IP(ipDetails.IP[:4]).To4().String(), uint32(ipDetails.PrefixLength))
+		ipAddr = fmt.Sprintf("%s/%d", net.IP(ipByte[:4]).To4().String(), uint32(ipDetails.Prefix.Len))
 	}
 
 	// skip IP addresses given by DHCP
@@ -670,8 +672,8 @@ func verifyIPSecTunnelDetails(local, remote *ipsec.IpsecSaDetails) error {
 			localIsTunnel, remoteIsTunnel)
 	}
 
-	localSrc, localDst := local.Entry.TunnelSrc.Un.Union_data, local.Entry.TunnelDst.Un.Union_data
-	remoteSrc, remoteDst := remote.Entry.TunnelSrc.Un.Union_data, remote.Entry.TunnelDst.Un.Union_data
+	localSrc, localDst := local.Entry.TunnelSrc.Un.XXX_UnionData, local.Entry.TunnelDst.Un.XXX_UnionData
+	remoteSrc, remoteDst := remote.Entry.TunnelSrc.Un.XXX_UnionData, remote.Entry.TunnelDst.Un.XXX_UnionData
 	if (local.Entry.Flags&ipsec.IPSEC_API_SAD_FLAG_IS_TUNNEL_V6) != (remote.Entry.Flags&ipsec.IPSEC_API_SAD_FLAG_IS_TUNNEL_V6) ||
 		!bytes.Equal(localSrc[:], remoteDst[:]) ||
 		!bytes.Equal(localDst[:], remoteSrc[:]) {
