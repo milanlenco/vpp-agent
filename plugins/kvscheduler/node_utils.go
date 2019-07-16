@@ -252,23 +252,35 @@ func getNodeLastOperation(node graph.Node) kvs.TxnOperation {
 	return kvs.TxnOperation_UNDEFINED
 }
 
-// getNodeDescriptor returns name of the descriptor associated with the given node.
-// Empty for properties and unimplemented values.
-func getNodeDescriptor(node graph.Node) string {
+// getNodeSources returns info about value source for a given node, stored in
+// the ValueSource flag.
+func getNodeSources(node graph.Node) *ValueSourceFlag {
 	if node == nil {
-		return ""
+		return nil
 	}
-	flag := node.GetFlag(DescriptorFlagIndex)
+	flag := node.GetFlag(ValueSourceFlagIndex)
 	if flag == nil {
-		return ""
+		return nil
 	}
-	return flag.(*DescriptorFlag).descriptorName
+	return flag.(*ValueSourceFlag)
+}
+
+func getNodeBaseSources(node graph.Node, graphR graph.ReadAccess) (baseSources []graph.Node) {
+	//sources := []graph.Node{node}
+
+	// TODO
+	// while sources is not empty:
+	//  pop one source:
+	//   - if base add to result
+	//   - for every derivedFrom add that node into the back of sources
+	return baseSources
 }
 
 func isNodeDerived(node graph.Node) bool {
 	return node.GetFlag(DerivedFlagIndex) != nil
 }
 
+// TODO: this will have to work differently
 func getNodeBaseKey(node graph.Node) string {
 	flag := node.GetFlag(DerivedFlagIndex)
 	if flag == nil {
@@ -290,6 +302,7 @@ func isNodeAvailable(node graph.Node) bool {
 // connected component are treated as if they were squashed into one.
 func isNodeReady(node graph.Node) bool {
 	if getNodeOrigin(node) == kvs.FromSB {
+		// TODO: get rid of this check
 		// for SB values dependencies are not checked
 		return true
 	}

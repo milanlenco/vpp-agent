@@ -20,6 +20,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 
 	kvs "github.com/ligato/vpp-agent/plugins/kvscheduler/api"
+	exec "github.com/ligato/vpp-agent/plugins/kvscheduler/internal/exec-engine"
 )
 
 const (
@@ -52,10 +53,16 @@ const (
 	// DescriptorFlagIndex is the index of the Descriptor flag.
 	DescriptorFlagIndex = 4
 
+	// TODO: remove the derived flag after migrating to execution engine
 	// DerivedFlagName is the name of the Derived flag.
 	DerivedFlagName = "derived"
 	// DerivedFlagIndex is the index of the Derived flag.
 	DerivedFlagIndex = 5
+
+	// ValueSourceFlagName is the name of the Value-Source flag.
+	ValueSourceFlagName = "value-source"
+	// ValueSourceFlagIndex is the index of the Value-Source flag.
+	ValueSourceFlagIndex = 6
 )
 
 // flagNameToIndex converts flag name to the associated index.
@@ -73,6 +80,8 @@ func flagNameToIndex(flagName string) int {
 		return DescriptorFlagIndex
 	case DerivedFlagName:
 		return DerivedFlagIndex
+	case ValueSourceFlagName:
+		return ValueSourceFlagIndex
 	}
 	return -1
 }
@@ -85,7 +94,7 @@ func flagNameToIndex(flagName string) int {
 type LastUpdateFlag struct {
 	txnSeqNum uint64
 	txnOp     kvs.TxnOperation
-	value     proto.Message
+	value     proto.Message  // the last applied *merged* value
 
 	// updated only when the value content is being modified
 	revert bool
@@ -207,6 +216,8 @@ func (flag *DescriptorFlag) GetValue() string {
 
 /**************************** Derived Value Flag ******************************/
 
+// TODO: remove the derived flag after migrating to execution engine
+
 // DerivedFlag is used to mark derived values.
 type DerivedFlag struct {
 	baseKey string
@@ -228,17 +239,100 @@ func (flag *DerivedFlag) GetValue() string {
 	return flag.baseKey
 }
 
+/**************************** Value Source Flag *******************************/
 
-/*
-TODO - value merging
+// ValueSource describes a source of the value.
+type ValueSource struct {
+	exec.KVSource
+	Value proto.Message // original (pre-merge) value as given by this source
+}
 
-- last-update flag?
-	- used to find out if NB wants a node to be deleted (but fails)
-    - in verification to get desired value, which for the node may be overshadowed by refresh
-    - to remember last operation (OK for merging)
+// ValueSourceFlag stores all the value source and their pre-merge values.
+type ValueSourceFlag struct {
+	// Beware: flag should be immutable - i.e. the slice cannot be changed in-place!
+	Sources []ValueSource  // ordered by DerivedFrom
 
+	// pre-computed on update
+	isDerivedOnly bool // without empty DerivedFrom
+	isObtained    bool // without FromNB
+}
 
+// GetIndex returns 5.
+func (flag *ValueSourceFlag) GetIndex() int {
+	return ValueSourceFlagIndex
+}
 
+// GetName return name of the Value-Source flag.
+func (flag *ValueSourceFlag) GetName() string {
+	return ValueStateFlagName
+}
 
+// GetValue describes value sources (keys only).
+func (flag *ValueSourceFlag) GetValue() string {
+	str := "{"
+	for i, source := range flag.Sources {
+		if source.DerivedFrom == "" {
+			str += source.Origin.String()
+		} else {
+			str += source.DerivedFrom
+		}
+		if i < len(flag.Sources)-1 {
+			str += ", "
+		}
+	}
+	str += "}"
+	return str
+}
 
- */
+// WithSource add value source into the flag.
+// If <inPlace> is disabled, the flag is first copied so that the original remains
+// unchanged.
+// If <flag> is nil a new flag is created with the single source.
+func (flag *ValueSourceFlag) WithSource(source ValueSource, inPlace bool) *ValueSourceFlag {
+
+	// TODO
+	return nil
+}
+
+// WithoutSource removed value source from the flag.
+// If <inPlace> is disabled, the flag is first copied so that the original remains
+// unchanged.
+// If this is the only source, the function returns nil.
+func (flag *ValueSourceFlag) WithoutSource(source exec.KVSource, inPlace bool) *ValueSourceFlag {
+
+	// TODO
+	return nil
+}
+
+// GetSources returns the value sources, also handling nil flag.
+func (flag *ValueSourceFlag) GetSources() []ValueSource {
+	if flag == nil {
+		return nil
+	}
+	return flag.Sources
+}
+
+// GetSourceValue returns the (pre-merge) value associated with the given source.
+func (flag *ValueSourceFlag) GetSourceValue(source exec.KVSource) proto.Message {
+	if flag == nil {
+		return nil
+	}
+	// TODO
+	return nil
+}
+
+// IsDerivedOnly returns true if all the value sources are derived values.
+func (flag *ValueSourceFlag) IsDerivedOnly() bool {
+	if flag == nil {
+		return false
+	}
+	return flag.isDerivedOnly
+}
+
+// IsObtained returns true if all the value sources are from SB.
+func (flag *ValueSourceFlag) IsObtained() bool {
+	if flag == nil {
+		return false
+	}
+	return flag.isObtained
+}

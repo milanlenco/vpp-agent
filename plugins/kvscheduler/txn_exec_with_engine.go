@@ -16,9 +16,12 @@ package kvscheduler
 
 import (
 	"runtime/trace"
+	"sort"
 	"time"
 
+	"github.com/ligato/cn-infra/logging"
 	"github.com/gogo/protobuf/proto"
+
 	kvs "github.com/ligato/vpp-agent/plugins/kvscheduler/api"
 	exec "github.com/ligato/vpp-agent/plugins/kvscheduler/internal/exec-engine"
 	"github.com/ligato/vpp-agent/plugins/kvscheduler/internal/graph"
@@ -36,26 +39,23 @@ type txnContext struct {
 // context associated with an in-progress key-value pair update
 type kvContext struct {
 	// input
-	baseKey     string
-	operation   kvs.TxnOperation
-	metadata    kvs.Metadata
-	origin      kvs.ValueOrigin
+	newMergedValue proto.Message
+	operation      kvs.TxnOperation
 
 	// output
 	newMetadata kvs.Metadata
-	opRecord   *kvs.RecordedTxnOp
+	opRecord    *kvs.RecordedTxnOp
 
 	// handlers
 	node       graph.NodeRW
 	descriptor *descriptorHandler
 
 	// flags
-	isDerived  bool
 	isRecreate bool
 	isRetry    bool
 
 	// previous value state - for FinalizeTxnOperation
-	prevValue   proto.Message
+	prevValue   proto.Message // merged
 	prevUpdate  *LastUpdateFlag
 	prevState   kvs.ValueState
 	prevOp      kvs.TxnOperation
@@ -63,9 +63,9 @@ type kvContext struct {
 	prevDetails []string
 
 	// for ExecuteTxnOperation
-	dryExec   bool
-	execStart time.Time
-	execStop  time.Time
+	dryExec   bool      // in
+	execStart time.Time // out
+	execStop  time.Time // out
 }
 
 // executeTransactionWithEngine executes pre-processed transaction.
@@ -96,27 +96,32 @@ func (s *Scheduler) executeTransactionWithEngine(txn *transaction, graphW graph.
 		kvChanges = append(kvChanges, exec.KVChange{
 			Key:      kv.key,
 			NewValue: kv.value,
+			Source: exec.KVSource{
+				Origin:      kv.origin,
+				DerivedFrom: "", // base value
+			},
 			Context: &kvContext{
-				baseKey:  kv.key,
-				metadata: kv.metadata,
-				origin:   kv.origin,
-				isRetry:  txn.txnType == kvs.RetryFailedOps,
+				isRetry: txn.txnType == kvs.RetryFailedOps,
 			},
 		})
 	}
 
-	withRevert := txn.txnType == kvs.NBTransaction && txn.nb.revertOnFailure
-	s.execEngine.RunTransaction(txnCtx, kvChanges, withRevert)
+	s.execEngine.RunTransaction(txnCtx, kvChanges)
 
 	// get rid of uninteresting intermediate pending Create/Delete operations
 	executed = s.compressTxnOps(txnCtx.executed)
 	return executed
 }
 
-// PrepareTxnOperation should update the underlying graph (abstracted-away
-// at this level) to reflect the requested value change.
+// PrepareTxnOperation updates the underlying graph to reflect the requested
+// value change.
+// It also possible to skip operation execution and order the execution engine
+// to move directly to Finalization without interruption.
+// <prevValue> is the previous value as set by the given source (i.e. for merged
+// value it is the previous value only for that single source) - ignored if
+// <KeepValue> is enabled.
 func (s *Scheduler) PrepareTxnOperation(txnPrivCtx exec.OpaqueCtx, kv *exec.KVChange, isRevert bool) (
-	prevValue proto.Message) {
+	skipExec bool, prevValue proto.Message) {
 
 	txnCtx := txnPrivCtx.(*txnContext)
 	kvCtx := kv.Context.(*kvContext)
@@ -131,7 +136,30 @@ func (s *Scheduler) PrepareTxnOperation(txnPrivCtx exec.OpaqueCtx, kv *exec.KVCh
 
 	// remember previous value for a potential revert
 	kvCtx.prevValue = kvCtx.node.GetValue()
-	prevValue = kvCtx.prevValue
+	sources := getNodeSources(kvCtx.node)
+	if !kv.KeepValue {
+		prevValue = sources.GetSourceValue(kv.Source)
+	}
+
+	// update value sources
+	if !kv.KeepValue {
+		if kv.NewValue == nil {
+			sources = sources.WithoutSource(kv.Source, !txnCtx.dryRun)
+		} else {
+			sources = sources.WithSource(ValueSource{
+				KVSource: kv.Source,
+				Value:    kv.NewValue,
+			}, !txnCtx.dryRun)
+		}
+		kvCtx.node.SetFlags(sources)
+
+		// SB is overshadowed by NB
+		if len(sources.GetSources()) > 0 && !sources.IsObtained() &&
+			kv.Source.Origin == kvs.FromSB {
+			skipExec = true
+			return
+		}
+	}
 
 	// remember previous value status to detect and notify about changes
 	kvCtx.prevUpdate = getNodeLastUpdate(kvCtx.node)
@@ -144,12 +172,26 @@ func (s *Scheduler) PrepareTxnOperation(txnPrivCtx exec.OpaqueCtx, kv *exec.KVCh
 	// executing the operation
 	kvCtx.opRecord = s.preRecordTxnOp2(kv, kvCtx, isRevert)
 
+	// merge all value sources into one value
+	for _, source := range sources.GetSources() {
+		if !sources.IsObtained() && source.Origin == kvs.FromSB {
+			// SB is overshadowed by NB
+			continue
+		}
+		value := source.Value
+		if value != nil {
+			if kvCtx.newMergedValue == nil {
+				kvCtx.newMergedValue = proto.Clone(value)
+			} else {
+				proto.Merge(kvCtx.newMergedValue, value)
+			}
+		}
+	}
+
 	// determine the operation type
-	// TODO: take into consideration multiple sources
-	//  - create/delete can actually result in Update
 	if kv.KeepValue {
 		kvCtx.operation = kvs.TxnOperation_UNDEFINED // determined in IsTxnOperationReady
-	} else if kv.NewValue == nil {
+	} else if kvCtx.newMergedValue == nil {
 		kvCtx.operation = kvs.TxnOperation_DELETE
 	} else if kvCtx.node.GetValue() == nil || !isNodeAvailable(kvCtx.node) {
 		kvCtx.operation = kvs.TxnOperation_CREATE
@@ -170,7 +212,7 @@ func (s *Scheduler) PrepareTxnOperation(txnPrivCtx exec.OpaqueCtx, kv *exec.KVCh
 	if kv.KeepValue {
 		lastUpdateFlag.value = prevValue
 	} else {
-		lastUpdateFlag.value = kv.NewValue
+		lastUpdateFlag.value = kvCtx.newMergedValue
 	}
 	if txnCtx.txnType == kvs.NBTransaction {
 		lastUpdateFlag.retryEnabled = txnCtx.nb.retryEnabled
@@ -179,9 +221,9 @@ func (s *Scheduler) PrepareTxnOperation(txnPrivCtx exec.OpaqueCtx, kv *exec.KVCh
 		// inherit retry arguments from the last NB txn for this value
 		lastUpdateFlag.retryEnabled = kvCtx.prevUpdate.retryEnabled
 		lastUpdateFlag.retryArgs = kvCtx.prevUpdate.retryArgs
-	} else if kvCtx.isDerived {
+	} else if !kv.KeepValue && kv.Source.DerivedFrom != "" {
 		// inherit from the parent value
-		parentNode := txnCtx.graphW.GetNode(kvCtx.baseKey)
+		parentNode := txnCtx.graphW.GetNode(kv.Source.DerivedFrom)
 		prevParentUpdate := getNodeLastUpdate(parentNode)
 		if prevParentUpdate != nil {
 			lastUpdateFlag.retryEnabled = prevParentUpdate.retryEnabled
@@ -221,8 +263,7 @@ func (s *Scheduler) prepareForDelete(txnCtx *txnContext, kv *exec.KVChange, kvCt
 
 func (s *Scheduler) prepareForCreate(txnCtx *txnContext, kv *exec.KVChange, kvCtx *kvContext, isRevert bool) (skipExec bool) {
 	node := kvCtx.node
-
-	// TODO
+	node.SetValue(kvCtx.newMergedValue)
 
 	// add descriptor flag
 	if !kvCtx.descriptor.isNil() {
@@ -230,13 +271,9 @@ func (s *Scheduler) prepareForCreate(txnCtx *txnContext, kv *exec.KVChange, kvCt
 		node.SetLabel(kvCtx.descriptor.keyLabel(kv.Key))
 	}
 
-	// mark derived value
-	if kvCtx.isDerived {
-		kvCtx.node.SetFlags(&DerivedFlag{baseKey: kvCtx.baseKey})
-	}
-
 	// handle unimplemented value
-	unimplemented := kvCtx.origin == kvs.FromNB && !kvCtx.isDerived && kvCtx.descriptor.isNil()
+	sources := getNodeSources(kvCtx.node)
+	unimplemented := !sources.IsObtained() && !sources.IsDerivedOnly() && kvCtx.descriptor.isNil()
 	if unimplemented {
 		skipExec = true
 		if getNodeState(kvCtx.node) == kvs.ValueState_UNIMPLEMENTED {
@@ -247,12 +284,37 @@ func (s *Scheduler) prepareForCreate(txnCtx *txnContext, kv *exec.KVChange, kvCt
 		node.DelFlags(ErrorFlagIndex)
 		kvCtx.opRecord.NOOP = true
 		kvCtx.opRecord.NewState = kvs.ValueState_UNIMPLEMENTED
-		s.updateNodeState(node, kvCtx.opRecord, args)
+		s.updateNodeState(node, kvCtx.opRecord.NewState, nil)
 		return
 	}
 
-	// TODO: node.SetValue() should use merge of all values from all sources of this KV
+	// validate value
+	if !txnCtx.dryRun && !sources.IsObtained() {
+		err := kvCtx.descriptor.validate(node.GetKey(), node.GetValue())
+		if err != nil {
+			skipExec = true
+			node.SetFlags(&UnavailValueFlag{})
+			kvCtx.opRecord.NewErr = err
+			kvCtx.opRecord.NewState = kvs.ValueState_INVALID
+			kvCtx.opRecord.NOOP = true
+			s.updateNodeState(node, kvCtx.opRecord.NewState, nil)
+			node.SetFlags(&ErrorFlag{err: err, retriable: false})
+			return
+		}
+	}
 
+	// apply new relations
+	derivedVals := kvCtx.descriptor.derivedValues(node.GetKey(), node.GetValue())
+	dependencies := kvCtx.descriptor.dependencies(node.GetKey(), node.GetValue())
+	node.SetTargets(constructTargets(dependencies, derivedVals))
+
+	if sources.IsObtained() {
+		// nothing to execute for SB notifications
+		skipExec = true
+		return
+	}
+
+	// continue with IsTxnOperationReady...
 	return
 }
 
@@ -263,24 +325,68 @@ func (s *Scheduler) prepareForUpdate(txnCtx *txnContext, kv *exec.KVChange, kvCt
 }
 
 // IsTxnOperationReady should determine whether to:
-//  - proceed with operation execution
+//  - proceed with operation execution or skip the execution and order
+//    the execution engine to move to Finalization without any (additional)
+//    interruption.
 //  - wait for some other key-value pairs (of the same transaction) to
-//    be changed first - once those values are finalized, the readiness
-//    check is repeated and the value change process continues accordingly
+//    be changed/checked first - once those values are finalized, the readiness
+//    check is repeated (skipping the values from precededBy which were already
+//    processed) and the value change process continues accordingly
 //  - block (freeze) some other values from entering the state machine while
-//    this value is waiting/being executed (unfrozen when finalized)
+//    this value is waiting/being executed (unfrozen when finalized) - if values
+//    to be frozen are still in-progress, they will be finalized first (unless
+//    this operation is preceding them)
 func (s *Scheduler) IsTxnOperationReady(txnPrivCtx exec.OpaqueCtx, kv *exec.KVChange) (
 	skipExec bool, precededBy []exec.KVChange, freeze utils.KeySet) {
 
 	//txnCtx := txnPrivCtx.(*txnContext)
 	kvCtx := kv.Context.(*kvContext)
+	node := kvCtx.node
 
-	// TODO
-
+	// determine operation for a dependency update
 	if kvCtx.operation == kvs.TxnOperation_UNDEFINED {
 		kvCtx.operation = s.determineDepUpdateOperation(kvCtx.node)
 		getNodeLastUpdate(kvCtx.node).txnOp = kvCtx.operation
+		if kvCtx.operation == kvs.TxnOperation_UNDEFINED {
+			// nothing to update
+			skipExec = true
+			return
+		}
 	}
+
+	switch kvCtx.operation {
+	case kvs.TxnOperation_DELETE:
+		// TODO
+
+	case kvs.TxnOperation_CREATE:
+		// check if dependencies are available
+		// Notes:
+		//   - nodes with in-progress Create operations also appear available
+		//   - dependencies will get frozen and once in-progress Create operation
+		//     finalize, IsTxnOperationReady will get re-run
+		if !isNodeReady(node) {
+			// if not ready, nothing to do
+			skipExec = true
+			node.SetFlags(&UnavailValueFlag{})
+			node.DelFlags(ErrorFlagIndex)
+			kvCtx.opRecord.NewState = kvs.ValueState_PENDING
+			kvCtx.opRecord.NOOP = true
+			s.updateNodeState(node, kvCtx.opRecord.NewState, nil)
+			return
+		}
+
+		// freeze dependencies
+		freeze := utils.NewSliceBasedKeySet()
+		for _, depPerLabel := range node.GetTargets(DependencyRelation) {
+			for _, depNode := range depPerLabel.Nodes {
+				freeze.Add(depNode.GetKey())
+			}
+		}
+
+	case kvs.TxnOperation_UPDATE:
+		// TODO
+	}
+
 
 	return false, nil, nil
 }
@@ -288,7 +394,12 @@ func (s *Scheduler) IsTxnOperationReady(txnPrivCtx exec.OpaqueCtx, kv *exec.KVCh
 // ExecuteTxnOperation is run from another go routine by one of the workers.
 // The method should apply the value change (call Create/Delete/Update on the
 // associated descriptor) and return error if the operation failed.
-func (s *Scheduler) ExecuteTxnOperation(workerID int, kv *exec.KVChange) (err error) {
+// Special error value AsyncExecError can be returned to signal the execution
+// engine that the operation will continue in the background (e.g. due
+// to a blocking action) and should be resumed (repeated with the checkpoint
+// given in the error) once signaled through the ResumeAsyncOperation()
+// method of the execution engine.
+func (s *Scheduler) ExecuteTxnOperation(workerID int, checkpoint int, kv *exec.KVChange) (err error) {
 	kvCtx := kv.Context.(*kvContext)
 	node := kvCtx.node
 
@@ -312,24 +423,151 @@ func (s *Scheduler) ExecuteTxnOperation(workerID int, kv *exec.KVChange) (err er
 
 // FinalizeTxnOperation is run after the operation has been executed/skipped.
 // Some more key-value pair may be requested to be changed as a consequence
-// (followUp).
+// (followedBy).
+// It is also possible to request the engine to trigger the transaction revert.
 func (s *Scheduler) FinalizeTxnOperation(txnPrivCtx exec.OpaqueCtx, kv *exec.KVChange,
-	wasRevert bool, opRetval error) (followUp []exec.KVChange) {
+	wasRevert bool, opRetval error) (revertTxn bool, followedBy []exec.KVChange) {
 
-	// TODO - don't forget about all the skips (unimplemented, SB) and new metadata
 	txnCtx := txnPrivCtx.(*txnContext)
 	kvCtx := kv.Context.(*kvContext)
+	node := kvCtx.node
+	sources := getNodeSources(node)
+
+	if kvCtx.operation == kvs.TxnOperation_UNDEFINED {
+		// nothing has been done
+		return
+	}
+
+	// update metadata
+	if kvCtx.operation != kvs.TxnOperation_DELETE {
+		if !sources.IsDerivedOnly() && kvCtx.descriptor.withMetadata() {
+			node.SetMetadataMap(kvCtx.descriptor.name())
+			node.SetMetadata(kvCtx.newMetadata)
+		}
+	}
+
+	// finalize operation
+	switch kvCtx.operation {
+	case kvs.TxnOperation_DELETE:
+		// TODO
+
+	case kvs.TxnOperation_CREATE:
+		if !kvCtx.opRecord.NOOP {
+			if opRetval == nil {
+				// value successfully created
+				node.DelFlags(ErrorFlagIndex, UnavailValueFlagIndex)
+				if sources.IsObtained() {
+					kvCtx.opRecord.NewState = kvs.ValueState_OBTAINED
+				} else {
+					kvCtx.opRecord.NewState = kvs.ValueState_CONFIGURED
+				}
+				s.updateNodeState(node, kvCtx.opRecord.NewState, nil)
+				followedBy = append(followedBy, s.scheduleDepUpdates(kvCtx, true)...)
+				followedBy = append(followedBy, s.scheduleDerivedUpdates(kvCtx, false)...)
+			} else {
+				// execution ended with error
+				node.SetFlags(&UnavailValueFlag{})
+				retriableErr := kvCtx.descriptor.isRetriableFailure(opRetval)
+				kvCtx.opRecord.NewErr = opRetval
+				kvCtx.opRecord.NewState = s.markFailedValue2(
+					node, opRetval, wasRevert, txnCtx, retriableErr)
+			}
+		}
+
+	case kvs.TxnOperation_UPDATE:
+		// TODO
+	}
 
 	// detect value state changes
 	if !txnCtx.dryRun {
 		nodeR := txnCtx.graphW.GetNode(kv.Key)
-		if kvCtx.prevUpdate == nil || kvCtx.prevState != getNodeState(nodeR) || kvCtx.prevOp != getNodeLastOperation(nodeR) ||
-			kvCtx.prevErr != getNodeErrorString(nodeR) || !equalValueDetails(kvCtx.prevDetails, getValueDetails(nodeR)) {
-			s.updatedStates.Add(kvCtx.baseKey)
+		stateChanged := kvCtx.prevUpdate == nil
+		stateChanged = stateChanged || kvCtx.prevState != getNodeState(nodeR)
+		stateChanged = stateChanged || kvCtx.prevOp != getNodeLastOperation(nodeR)
+		stateChanged = stateChanged || kvCtx.prevErr != getNodeErrorString(nodeR)
+		stateChanged = stateChanged || !equalValueDetails(kvCtx.prevDetails, getValueDetails(nodeR))
+		if stateChanged {
+			// update status of all base values from which this value is derived from
+			for _, baseNode := range getNodeBaseSources(nodeR, txnCtx.graphW) {
+				s.updatedStates.Add(baseNode.GetKey())
+			}
 		}
 	}
 
-	return nil
+	// TODO: do not revert on invalid value not originating from this transaction
+	withRevert := txnCtx.txnType == kvs.NBTransaction && txnCtx.nb.revertOnFailure
+	revertTxn = withRevert && kvCtx.opRecord.NewErr != nil
+
+	// record the operation
+	txnCtx.executed = append(txnCtx.executed, kvCtx.opRecord)
+	return
+}
+
+// scheduleDepUpdates prepares a list of key-value pairs which will be re-check
+// for dependencies.
+func (s *Scheduler) scheduleDepUpdates(kvCtx *kvContext, forUnavailable bool) (updates []exec.KVChange) {
+	var depNodes []graph.Node
+	node := kvCtx.node
+	for _, depPerLabel := range node.GetSources(DependencyRelation) {
+		depNodes = append(depNodes, depPerLabel.Nodes...)
+	}
+
+	// order depNodes by key (just for deterministic behaviour which simplifies testing)
+	sort.Slice(depNodes, func(i, j int) bool { return depNodes[i].GetKey() < depNodes[j].GetKey() })
+
+	for _, depNode := range depNodes {
+		if getNodeSources(depNode).IsObtained() {
+			continue
+		}
+		if !isNodeAvailable(depNode) != forUnavailable {
+			continue
+		}
+
+		updates = append(updates, exec.KVChange{
+			Key:       depNode.GetKey(),
+			KeepValue: true,
+			Context:   &kvContext{},
+		})
+	}
+	return
+}
+
+// scheduleDerivedUpdates prepares a list of derived key-value pairs for value-change.
+func (s *Scheduler) scheduleDerivedUpdates(kvCtx *kvContext, remove bool) (updates []exec.KVChange) {
+	node := kvCtx.node
+	derivedVals := kvCtx.descriptor.derivedValues(node.GetKey(), node.GetValue())
+
+	// order derivedVals by key (just for deterministic behaviour which simplifies testing)
+	sort.Slice(derivedVals, func(i, j int) bool { return derivedVals[i].Key < derivedVals[j].Key })
+
+	for _, derived := range derivedVals {
+		if derived.Value == nil {
+			s.Log.WithFields(logging.Fields{
+				"key":          derived.Key,
+				"derived-from": node.GetKey(),
+			}).Warn("Derived nil value")
+			continue
+		}
+
+		value := derived.Value
+		if remove {
+			value = nil
+		}
+		origin := kvs.FromNB
+		if getNodeSources(node).IsObtained() {
+			origin = kvs.FromSB
+		}
+		updates = append(updates, exec.KVChange{
+			Key:       derived.Key,
+			NewValue:  value,
+			Source:    exec.KVSource{
+				Origin:      origin,
+				DerivedFrom: node.GetKey(),
+			},
+			Context:   &kvContext{},
+		})
+	}
+	return
 }
 
 // PrepareForTxnRevert is run before reverting of already applied key-value
@@ -337,4 +575,36 @@ func (s *Scheduler) FinalizeTxnOperation(txnPrivCtx exec.OpaqueCtx, kv *exec.KVC
 func (s *Scheduler) PrepareForTxnRevert(txnPrivCtx exec.OpaqueCtx, failedKVChanges utils.KeySet) {
 	txnCtx := txnPrivCtx.(*txnContext)
 	s.refreshGraph(txnCtx.graphW, failedKVChanges, nil, true)
+}
+
+// markFailedValue2 (will replace markFailedValue) decides whether to retry failed
+// operation or not and updates the node state accordingly.
+func (s *Scheduler) markFailedValue2(node graph.NodeRW, err error, wasRevert bool,
+	txnCtx *txnContext, retriableErr bool) (newState kvs.ValueState) {
+
+	// decide value state between FAILED and RETRYING
+	newState = kvs.ValueState_FAILED
+	toBeReverted := txnCtx.txnType == kvs.NBTransaction && txnCtx.nb.revertOnFailure && !wasRevert
+	if retriableErr && !toBeReverted {
+		// consider operation retry
+		var alreadyRetried bool
+		if txnCtx.txnType == kvs.RetryFailedOps {
+			// TODO: handle multi-source
+			baseKey := getNodeBaseKey(node)
+			_, alreadyRetried = txnCtx.retry.keys[baseKey]
+		}
+		attempt := 1
+		if alreadyRetried {
+			attempt = txnCtx.retry.attempt + 1
+		}
+		lastUpdate := getNodeLastUpdate(node)
+		if lastUpdate.retryEnabled && lastUpdate.retryArgs != nil &&
+			(lastUpdate.retryArgs.MaxCount == 0 || attempt <= lastUpdate.retryArgs.MaxCount) {
+			// retry is allowed
+			newState = kvs.ValueState_RETRYING
+		}
+	}
+	s.updateNodeState(node, newState, nil)
+	node.SetFlags(&ErrorFlag{err: err, retriable: retriableErr})
+	return newState
 }

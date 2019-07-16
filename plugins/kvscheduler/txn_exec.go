@@ -867,7 +867,10 @@ func (s *Scheduler) compressTxnOps(executed kvs.RecordedTxnOps) kvs.RecordedTxnO
 func (s *Scheduler) updateNodeState(node graph.NodeRW, newState kvs.ValueState, args *applyValueArgs) {
 	if getNodeState(node) != newState {
 		if s.logGraphWalk {
-			indent := strings.Repeat(" ", (args.depth+1)*2)
+			indent := ""
+			if args != nil {
+				indent = strings.Repeat(" ", (args.depth+1)*2)
+			}
 			fmt.Printf("%s-> change value state from %v to %v\n", indent, getNodeState(node), newState)
 		}
 		node.SetFlags(&ValueStateFlag{valueState: newState})

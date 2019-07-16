@@ -53,7 +53,7 @@ func (h *descriptorHandler) name() string {
 	return h.descriptor.Name
 }
 
-// keyLabel by default returns the key itself.
+// keyLabel returns the key itself by default.
 func (h *descriptorHandler) keyLabel(key string) string {
 	if h.descriptor == nil || h.descriptor.KeyLabel == nil {
 		return key
@@ -62,7 +62,15 @@ func (h *descriptorHandler) keyLabel(key string) string {
 	return h.descriptor.KeyLabel(key)
 }
 
-// equivalentValues by default uses proto.Equal().
+// withMetadata returns false by default.
+func (h *descriptorHandler) withMetadata() bool {
+	if h.descriptor == nil {
+		return false
+	}
+	return h.descriptor.WithMetadata
+}
+
+// equivalentValues uses proto.Equal() by default.
 func (h *descriptorHandler) equivalentValues(key string, oldValue, newValue proto.Message) bool {
 	if h.descriptor == nil || h.descriptor.ValueComparator == nil {
 		return proto.Equal(oldValue, newValue)

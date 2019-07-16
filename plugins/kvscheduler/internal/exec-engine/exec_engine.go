@@ -30,7 +30,8 @@ type KVChange struct {
 	Source    KVSource
 
 	// Keep the current value, just re-check the state (dependencies, etc.) and
-	// act accordingly. If enabled, NewValue should be ignored by TxnExecHandler.
+	// act accordingly. If enabled, NewValue and Source should be ignored
+	// by TxnExecHandler.
 	KeepValue bool
 
 	// Private context to be used by TxnExecHandler.
@@ -114,7 +115,7 @@ func (e *AsyncExecError) Error() string {
 type TxnExecEngine interface {
 	// RunTransaction executes transaction containing a given set of key-value
 	// change requests.
-	RunTransaction(txnCtx OpaqueCtx, input []KVChange, withRevert bool)
+	RunTransaction(txnCtx OpaqueCtx, input []KVChange)
 
 	// ResumeAsyncOperation signals the execution engine to continue with
 	// the execution for the ongoing asynchronous operation associated with the
@@ -138,12 +139,14 @@ type TxnExecHandler interface {
 	//// KV Change Processing:
 
 	// PrepareTxnOperation should update the underlying graph (abstracted-away
-	// at this level) to reflect the requested value change.
+	// at the level of the execution engine) to reflect the requested value change.
 	// It also possible to skip operation execution and order the execution engine
 	// to move directly to Finalization without interruption.
-	// prevValue is the previous value as set by the given source (i.e. for merged
-	// value it is the previous value only for that single source).
-	PrepareTxnOperation(txnCtx OpaqueCtx, kv *KVChange, isRevert bool) (prevValue proto.Message)
+	// <prevValue> is the previous value as set by the given source (i.e. for merged
+	// value it is the previous value only for that single source) - ignored
+	// if <KeepValue> is enabled.
+	PrepareTxnOperation(txnCtx OpaqueCtx, kv *KVChange, isRevert bool) (
+		skipExec bool, prevValue proto.Message)
 
 	// IsTxnOperationReady should determine whether to:
 	//  - proceed with operation execution or skip the execution and order
@@ -172,9 +175,10 @@ type TxnExecHandler interface {
 
 	// FinalizeTxnOperation is run after the operation has been executed/skipped.
 	// Some more key-value pair may be requested to be changed as a consequence
-	// (followUp).
+	// (followedBy).
+	// It is also possible to request the engine to trigger the transaction revert.
 	FinalizeTxnOperation(txnCtx OpaqueCtx, kv *KVChange, wasRevert bool, opRetval error) (
-		followedBy []KVChange)
+		revertTxn bool, followedBy []KVChange)
 
 	//// Revert:
 
@@ -203,7 +207,7 @@ func NewTxnExecEngine(handler TxnExecHandler, numOfWorkers int, verboseLog bool)
 
 // RunTransaction executes transaction containing a given set of key-value
 // change requests.
-func (e *txnExecEngine) RunTransaction(txnCtx OpaqueCtx, input []KVChange, withRevert bool) {
+func (e *txnExecEngine) RunTransaction(txnCtx OpaqueCtx, input []KVChange) {
 	// TODO
 }
 
@@ -229,14 +233,22 @@ func (e *txnExecEngine) Close() error {
 // - every value should be changed only at most once within a transaction - other
 //   operations should be dependency updates
 //   - add assertion to panic if this is not satisfied
+//   - actually not quite true for derived values which may be created and destroyed
+//     within the same txn !!!
 // - the value should not be in the queue more than once
 //    - value change overwrites dependency update
 //    - multiple planned dependency updates are pointless
 //    - dependency update is basically already included in the value change
+// - when transaction is started all value-change requests should be immediately
+//   put into the queue - dependency-update before the first value-change will be
+//   therefore omitted
+// - when execution is skipped, FinalizeTxnOperation is called with nil opRetval
 // - if the value is already being executed or is waiting, another operation
 //   should be blocked - i.e. add "blocked" queue - and re-enqueued ASAP to the
 //   front (regardless whether BFS or DFS is being used as it was already decided
-//   to do that operation at the given moment, but it had to be blocked)
+//   to do that operation at the given moment, but it had to be blocked
+//     - XXX not needed to behave like this, just enqueue as BFS or DFS and when
+//       it is to-be processed, either postpone or go ahead)
 // - whether to use DFS or BFS is from the functional point irrelevant
 // - graph updates will be done in the preparation phase - that means, however,
 //   that all the related values must be "blocked" (frozen - chose one of these words)
@@ -257,13 +269,17 @@ func (e *txnExecEngine) Close() error {
 //    - delete of A freezes B, C (both NOOP, already frozen implicitly - run transitive closure)
 // - error during execution should be processed with priority
 // - the size of the queue for the execution should be a multiple of the worker count
+// - beware: ResumeAsyncOperation can overtake AsyncExecError (so on return the operation
+//   could be immediately resumed)
+// - it is possible to skipExec even from IsReady.. to handle cases when value
+//   that was waited for has failed to get applied
 // - Create/Update/Delete operation walk-through:
 //    - Create
 //       - Prepare:
-//          - add node with unavailable flag
+//          - add node (without unavailable flag, pretending success until something fails)
 //          - add relations
-//          - skip exec if some dependency is missing
 //       - IsReady:
+//          - skip exec if some dependency is missing
 //          - freeze dependencies
 //       - Execute:
 //          - Create the thing

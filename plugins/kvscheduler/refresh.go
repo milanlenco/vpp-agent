@@ -26,6 +26,8 @@ import (
 	"github.com/ligato/vpp-agent/plugins/kvscheduler/internal/utils"
 )
 
+// TODO: refresh values with multiple sources
+
 var enableGraphDump = os.Getenv("KVSCHEDULER_GRAPHDUMP") != ""
 
 const (

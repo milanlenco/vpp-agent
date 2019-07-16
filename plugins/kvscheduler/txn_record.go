@@ -77,11 +77,6 @@ func (s *Scheduler) GetRecordedTransaction(SeqNum uint64) (txn *kvs.RecordedTxn)
 // preRecordTxnOp prepares txn operation record - fills attributes that we can even
 // before executing the operation.
 func (s *Scheduler) preRecordTxnOp(args *applyValueArgs, node graph.Node) *kvs.RecordedTxnOp {
-	prevOrigin := getNodeOrigin(node)
-	if prevOrigin == kvs.UnknownOrigin {
-		// new value
-		prevOrigin = args.kv.origin
-	}
 	_, prevErr := getNodeError(node)
 	return &kvs.RecordedTxnOp{
 		Key:        args.kv.key,
@@ -101,27 +96,23 @@ func (s *Scheduler) preRecordTxnOp(args *applyValueArgs, node graph.Node) *kvs.R
 // before executing the operation.
 func (s *Scheduler) preRecordTxnOp2(kv *exec.KVChange, kvCtx *kvContext, isRevert bool) *kvs.RecordedTxnOp {
 	node := kvCtx.node
-	prevOrigin := getNodeOrigin(node)
-	if prevOrigin == kvs.UnknownOrigin {
-		// new value
-		prevOrigin = kvCtx.origin
-	}
 	_, prevErr := getNodeError(node)
 	value := node.GetValue()
 	if !kv.KeepValue {
 		value = kv.NewValue
 	}
+	isDerived := kv.Source.DerivedFrom != ""
 	return &kvs.RecordedTxnOp{
 		Key:        kv.Key,
 		PrevValue:  utils.RecordProtoMessage(node.GetValue()),
 		NewValue:   utils.RecordProtoMessage(value),
 		PrevState:  getNodeState(node),
 		PrevErr:    prevErr,
-		IsDerived:  kvCtx.isDerived,
-		IsProperty: kvCtx.isDerived && s.registry.GetDescriptorForKey(kv.Key) == nil,
+		IsDerived:  isDerived,
+		IsProperty: isDerived && s.registry.GetDescriptorForKey(kv.Key) == nil,
 		IsRevert:   isRevert,
 		IsRetry:    kvCtx.isRetry,
-		//IsRecreate: args.recreating != nil && args.recreating.Has(args.kv.key),
+		IsRecreate: kvCtx.isRecreate,
 	}
 }
 
