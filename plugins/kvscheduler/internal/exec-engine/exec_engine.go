@@ -26,23 +26,36 @@ import (
 // by the transaction.
 type KVChange struct {
 	Key       string
-	NewValue  proto.Message
-	Source    KVSource
+	// Note: multiple sources are allowed to change (subset of) the value
+	// at the same time. But typically this is a one-item array.
+	NewValues []ValueWithSource
 
 	// Keep the current value, just re-check the state (dependencies, etc.) and
-	// act accordingly. If enabled, NewValue and Source should be ignored
-	// by TxnExecHandler.
+	// act accordingly. If enabled, NewValues should be ignored by TxnExecHandler.
 	KeepValue bool
 
 	// Private context to be used by TxnExecHandler.
-	Context OpaqueCtx
+	Context OpaqueCtx // TODO: how to merge kvContext of multiple KVChanges for the same value (but different sources; not KeepValue)
 }
 
-// KVSource identifies the source of the value being applied.
-// Note: value is allowed to have multiple sources.
-type KVSource struct {
+// ValueSource determines where the given value came from.
+// Possibilities are:
+//   - value requested by NB (NB value)
+//   - value derived from a NB value
+//   - value received as notification from SB (SB notification)
+//   - value derived from a SB notification
+type ValueSource struct {
 	Origin      kvs.ValueOrigin
 	DerivedFrom string
+}
+
+// ValueWithSource associates value with its source.
+// Note: value is allowed to have multiple sources. Values from different
+// sources applied for the same key should be merged into one by the execution
+// handler.
+type ValueWithSource struct {
+	ValueSource
+	Value proto.Message
 }
 
 // OpaqueCtx is used to plug arbitrary data into the execution context.
@@ -72,7 +85,7 @@ func (e *AsyncExecError) Error() string {
 // when the engine is closed with Close().
 // To execute a new transaction, call RunTransaction. The method is synchronous
 // (i.e. blocking), but the requested key-value changes are load-balanced across
-// workers to maximize the utilization.
+// workers and potentially executed asynchronously to maximize the utilization.
 //
 // The engine is used to help with the graph walk without even understanding the
 // details of the graph representation/implementation at this abstraction level.
@@ -90,6 +103,10 @@ func (e *AsyncExecError) Error() string {
 //          - wait for some other key-value pairs (of the same transaction) to
 //            be changed first - once those values are finalized, the readiness
 //            check is repeated and the value change process continues accordingly
+//          - block (freeze) some other values from entering the state machine while
+//            this value is waiting/being executed (unfrozen when finalized) - if
+//            values to be frozen are still in-progress, they will be finalized
+//            first (unless this operation is preceding them)
 //  3. Execution:
 //      - run by one of the workers (i.e. different go routine)
 //      - the underlying handler is supposed to execute the given operation
@@ -110,8 +127,8 @@ func (e *AsyncExecError) Error() string {
 // In principle, the steps 1-4 represent a graph node visit. The step 2 may cause
 // the visit to be delayed until other nodes have been finalized, step 3 performs
 // the actual operation and step 4 may enqueue adjacent nodes to be visited later.
-// The next set of nodes to visit is added into the front of the queue, thus
-// the graph is walked in the DFS order.
+// The next set of nodes to visit is added into the back of the queue, thus
+// the graph is walked in the BFS order.
 type TxnExecEngine interface {
 	// RunTransaction executes transaction containing a given set of key-value
 	// change requests.
@@ -140,13 +157,16 @@ type TxnExecHandler interface {
 
 	// PrepareTxnOperation should update the underlying graph (abstracted-away
 	// at the level of the execution engine) to reflect the requested value change.
-	// It also possible to skip operation execution and order the execution engine
+	// Multiple values defined for the same key by different sources should be merged
+	// into one proto message.
+	// It is also possible to skip operation execution and order the execution engine
 	// to move directly to Finalization without interruption.
-	// <prevValue> is the previous value as set by the given source (i.e. for merged
-	// value it is the previous value only for that single source) - ignored
-	// if <KeepValue> is enabled.
+	// <prevValues> should contain previous value for every source whose value
+	// assigned to this key has been changed by the operation - ignored
+	// if <KeepValue> is enabled. Since most values are typically single-source,
+	// this is usually just a one-item slice.
 	PrepareTxnOperation(txnCtx OpaqueCtx, kv *KVChange, isRevert bool) (
-		skipExec bool, prevValue proto.Message)
+		skipExec bool, prevValues []ValueWithSource)
 
 	// IsTxnOperationReady should determine whether to:
 	//  - proceed with operation execution or skip the execution and order
@@ -174,7 +194,7 @@ type TxnExecHandler interface {
 	ExecuteTxnOperation(workerID, checkpoint int, kv *KVChange) (err error)
 
 	// FinalizeTxnOperation is run after the operation has been executed/skipped.
-	// Some more key-value pair may be requested to be changed as a consequence
+	// Some more key-value pairs may be requested to be changed as a consequence
 	// (followedBy).
 	// It is also possible to request the engine to trigger the transaction revert.
 	FinalizeTxnOperation(txnCtx OpaqueCtx, kv *KVChange, wasRevert bool, opRetval error) (
@@ -230,15 +250,12 @@ func (e *txnExecEngine) Close() error {
 
 
 // TODO: couple of notes:
-// - every value should be changed only at most once within a transaction - other
-//   operations should be dependency updates
-//   - add assertion to panic if this is not satisfied
-//   - actually not quite true for derived values which may be created and destroyed
-//     within the same txn !!!
 // - the value should not be in the queue more than once
 //    - value change overwrites dependency update
 //    - multiple planned dependency updates are pointless
 //    - dependency update is basically already included in the value change
+//    - multiple value changes (derived from multiple sources + combined with base)
+//      can be merged into one operation
 // - when transaction is started all value-change requests should be immediately
 //   put into the queue - dependency-update before the first value-change will be
 //   therefore omitted
@@ -249,7 +266,9 @@ func (e *txnExecEngine) Close() error {
 //   to do that operation at the given moment, but it had to be blocked
 //     - XXX not needed to behave like this, just enqueue as BFS or DFS and when
 //       it is to-be processed, either postpone or go ahead)
-// - whether to use DFS or BFS is from the functional point irrelevant
+// - whether to use DFS or BFS is from the functional point irrelevant, but BFS
+//   will be more efficient since multiple derivations of the same value could be
+//   merged into one operation
 // - graph updates will be done in the preparation phase - that means, however,
 //   that all the related values must be "blocked" (frozen - chose one of these words)
 //    - those which are already being updated will be waited for (and not allowed to
@@ -341,3 +360,67 @@ func (e *txnExecEngine) Close() error {
 //          - Finalize
 //              - mark node as available
 //              - followed up by the creation of derived values
+
+
+// - TODO: unsolved issues
+// - how to approach Refresh with multiple levels of derived values?
+//   - e.g. for 2 interfaces in bridge domain, one of them not inserted into BD
+//      - should Interconnection descriptor dump incomplete model?
+//      - should Interconnection descriptor even implement Retrieve?
+//      - how will refresh determine if the value actually exists (is dumped)
+//        and is not just derived out
+//        - I guess if the value has descriptor with Retrieve implemented, then
+//          that Retrieve determines availability and actual value
+//        - otherwise the value and availability is given by derivation, and SB/NB
+//          base values without Retrieve remain unchanged
+//
+// - how to approach Retry?
+//      - if merged base/derived-only/mix value fails, what to retry?
+//      - should all base parents be retried?
+//
+// - how to approach Resync (efficiently)?
+//      - merged value may be edited multiple times
+//      - for example, consider multiple interconnect model instances deriving
+//        (a subset) of the same bridge domain
+//      - perhaps the kv-changes for the same value but from different sources
+//        could be merged into one iteration of the execution engine
+//
+// - Observations:
+//      - most likely the "last-update" will have to be per-source and included
+//        in the value-sources flag
+//      - Retrieve returns the merged value and overwrites whatever would be
+//        a result of merging the derived values
+//      - retry might need to be:
+//          - per-source OR
+//          - refresh+retry every closest parent value with Retrieve defined
+//            on every branch following inverse of derivations (uh oh)
+//      - Refresh would update:
+//          - node actual value (Retrieve overwrites merge of derived)
+//          - unavailability flag - NB values which are not only derived will be
+//            marked as not available instead of deleted, retrieved/derived values
+//            will be marked available
+//          - value sources ? - probably YES to keep it in-sync with relations
+//             - i.e. removes derives-from for obsolete derivations
+//             - adds derived-from without last-update-txn info for derivations
+//               which actually do exist
+//      - BFS could be more efficient than DFS with high-level models and derived/merged
+//        values if value changes are merged under one operation
+
+// - Ideas:
+//    - async goVPP:
+//       func (ch *Channel) SendAsyncRequest(req, resp api.Message, receiveClb func(error)) {
+//          ...
+//       }
+//   - async vppcalls:
+//      func (h *InterfaceVppHandler) InterfaceAdminUp(ifIdx uint32, receiveClb func(error)) {
+//          req := &interfaces.SwInterfaceSetFlags{
+//              SwIfIndex:   ifIdx,
+//              AdminUpDown: boolToUint(1),
+//          }
+//          reply := &interfaces.SwInterfaceSetFlagsReply{}
+//          h.callsChannel.SendAsyncRequest(req, reply, receiveClb)
+//      }
+//
+
+
+

@@ -94,10 +94,10 @@ func flagNameToIndex(flagName string) int {
 type LastUpdateFlag struct {
 	txnSeqNum uint64
 	txnOp     kvs.TxnOperation
-	value     proto.Message  // the last applied *merged* value
+	value     proto.Message  // the last applied *merged* value  TODO: needed? (currently used for downstream resync + retry + verification
 
 	// updated only when the value content is being modified
-	revert bool
+	revert bool // TODO: needed?
 
 	// set by NB txn, inherited by Retry and SB notifications
 	retryEnabled bool
@@ -241,16 +241,9 @@ func (flag *DerivedFlag) GetValue() string {
 
 /**************************** Value Source Flag *******************************/
 
-// ValueSource describes a source of the value.
-type ValueSource struct {
-	exec.KVSource
-	Value proto.Message // original (pre-merge) value as given by this source
-}
-
 // ValueSourceFlag stores all the value source and their pre-merge values.
 type ValueSourceFlag struct {
-	// Beware: flag should be immutable - i.e. the slice cannot be changed in-place!
-	Sources []ValueSource  // ordered by DerivedFrom
+	Sources []exec.ValueWithSource  // ordered by DerivedFrom
 
 	// pre-computed on update
 	isDerivedOnly bool // without empty DerivedFrom
@@ -288,7 +281,7 @@ func (flag *ValueSourceFlag) GetValue() string {
 // If <inPlace> is disabled, the flag is first copied so that the original remains
 // unchanged.
 // If <flag> is nil a new flag is created with the single source.
-func (flag *ValueSourceFlag) WithSource(source ValueSource, inPlace bool) *ValueSourceFlag {
+func (flag *ValueSourceFlag) WithSource(source exec.ValueWithSource, inPlace bool) *ValueSourceFlag {
 
 	// TODO
 	return nil
@@ -298,14 +291,14 @@ func (flag *ValueSourceFlag) WithSource(source ValueSource, inPlace bool) *Value
 // If <inPlace> is disabled, the flag is first copied so that the original remains
 // unchanged.
 // If this is the only source, the function returns nil.
-func (flag *ValueSourceFlag) WithoutSource(source exec.KVSource, inPlace bool) *ValueSourceFlag {
+func (flag *ValueSourceFlag) WithoutSource(source exec.ValueSource, inPlace bool) *ValueSourceFlag {
 
 	// TODO
 	return nil
 }
 
 // GetSources returns the value sources, also handling nil flag.
-func (flag *ValueSourceFlag) GetSources() []ValueSource {
+func (flag *ValueSourceFlag) GetSources() []exec.ValueWithSource {
 	if flag == nil {
 		return nil
 	}
@@ -313,7 +306,7 @@ func (flag *ValueSourceFlag) GetSources() []ValueSource {
 }
 
 // GetSourceValue returns the (pre-merge) value associated with the given source.
-func (flag *ValueSourceFlag) GetSourceValue(source exec.KVSource) proto.Message {
+func (flag *ValueSourceFlag) GetSourceValue(source exec.ValueSource) proto.Message {
 	if flag == nil {
 		return nil
 	}

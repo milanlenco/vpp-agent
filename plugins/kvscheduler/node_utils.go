@@ -271,7 +271,7 @@ func getNodeBaseSources(node graph.Node, graphR graph.ReadAccess) (baseSources [
 	// TODO
 	// while sources is not empty:
 	//  pop one source:
-	//   - if base add to result
+	//   - if not only derived add to result
 	//   - for every derivedFrom add that node into the back of sources
 	return baseSources
 }
