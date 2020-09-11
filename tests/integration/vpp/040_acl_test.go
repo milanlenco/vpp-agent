@@ -56,6 +56,20 @@ func newACLIPRule(permit bool, src, dst string) *acl.ACL_Rule {
 }
 
 // helper function which returns ACL_Rule (to avoid of declarating variable)
+func newACLIPRuleWithProto(permit bool, src, dst string, proto acl.ACL_Rule_IpRule_Ip_Protocol) *acl.ACL_Rule {
+	return &acl.ACL_Rule{
+		Action: rulePerm(permit),
+		IpRule: &acl.ACL_Rule_IpRule{
+			Ip: &acl.ACL_Rule_IpRule_Ip{
+				SourceNetwork:      src,
+				DestinationNetwork: dst,
+				Protocol:           proto,
+			},
+		},
+	}
+}
+
+// helper function which returns ACL_Rule (to avoid of declarating variable)
 func newACLIPRuleIcmp(permit, isicmpv6 bool, codefrom, codeto, typefrom, typeto uint32) *acl.ACL_Rule {
 	return &acl.ACL_Rule{
 		Action: rulePerm(permit),
@@ -175,6 +189,8 @@ func TestCRUDIPAcl(t *testing.T) {
 		newACLIPRuleTCP(true, 10, 20, 150, 250, 1150, 1250),
 		//RuleName:  "denyUDP",
 		newACLIPRuleUDP(false, 150, 250, 1150, 1250),
+		// deny OSPF
+		newACLIPRuleWithProto(false, "0.0.0.0/0", "0.0.0.0/0", acl.ACL_Rule_IpRule_Ip_OSPF),
 	}, aclname)
 	Expect(err).To(BeNil())
 	Expect(aclIdx).To(BeEquivalentTo(0))
@@ -190,7 +206,7 @@ func TestCRUDIPAcl(t *testing.T) {
 	t.Log("amount of acls dumped: 1")
 
 	var rules []*acl.ACL_Rule
-	var isIPRulePresent, isICMPRulePresent, isICMP6RulePresent, isForInterface bool
+	var isIPRulePresent, isICMPRulePresent, isICMP6RulePresent, isOSPFRulePresent, isForInterface bool
 	for _, item := range acls {
 		rules = item.ACL.Rules
 		if (item.Meta.Index == aclIdx) && (aclname == item.Meta.Tag) {
@@ -212,6 +228,11 @@ func TestCRUDIPAcl(t *testing.T) {
 						isICMPRulePresent = true
 					}
 				}
+				if rule.IpRule.GetIp().GetSourceNetwork() == "0.0.0.0/0" &&
+					rule.IpRule.GetIp().GetDestinationNetwork() == "0.0.0.0/0" &&
+					rule.IpRule.GetIp().GetProtocol() == acl.ACL_Rule_IpRule_Ip_OSPF {
+					isOSPFRulePresent = true
+				}
 			}
 
 			// check assignation to interface
@@ -226,6 +247,7 @@ func TestCRUDIPAcl(t *testing.T) {
 	Expect(isIPRulePresent).To(BeTrue(), "Configured IP rule should be present")
 	Expect(isICMPRulePresent).To(BeTrue(), "Configured ICMP rule should be present")
 	Expect(isICMP6RulePresent).To(BeTrue(), "Configured ICMPv6 rule should be present")
+	Expect(isOSPFRulePresent).To(BeTrue(), "Configured OSPF rule should be present")
 	Expect(isForInterface).To(BeTrue(), "acl should be assigned to interface")
 
 	indexes := []uint32{ifIdx, ifIdx2}

@@ -172,12 +172,29 @@ func transformACLIpRules(rules []*acl.ACL_Rule) (aclIPRules []vpp_acl.ACLRule, e
 				}
 			}
 			// ICMP/L4
-			if ipRule.Icmp != nil {
-				aclRule = icmpACL(ipRule.Icmp, aclRule)
-			} else if ipRule.Tcp != nil {
-				aclRule = tcpACL(ipRule.Tcp, aclRule)
-			} else if ipRule.Udp != nil {
-				aclRule = udpACL(ipRule.Udp, aclRule)
+			switch ipRule.Ip.GetProtocol() {
+			case acl.ACL_Rule_IpRule_Ip_AUTO:
+				if ipRule.Icmp != nil {
+					aclRule = icmpACL(ipRule.Icmp, aclRule)
+				} else if ipRule.Tcp != nil {
+					aclRule = tcpACL(ipRule.Tcp, aclRule)
+				} else if ipRule.Udp != nil {
+					aclRule = udpACL(ipRule.Udp, aclRule)
+				}
+			case acl.ACL_Rule_IpRule_Ip_ICMP:
+				fallthrough
+			case acl.ACL_Rule_IpRule_Ip_ICMP6:
+				if ipRule.Icmp != nil {
+					aclRule = icmpACL(ipRule.Icmp, aclRule)
+				}
+			case acl.ACL_Rule_IpRule_Ip_TCP:
+				if ipRule.Tcp != nil {
+					aclRule = tcpACL(ipRule.Tcp, aclRule)
+				}
+			case acl.ACL_Rule_IpRule_Ip_UDP:
+				if ipRule.Udp != nil {
+					aclRule = udpACL(ipRule.Udp, aclRule)
+				}
 			}
 			aclIPRules = append(aclIPRules, *aclRule)
 		}
@@ -295,6 +312,7 @@ func ipACL(ipRule *acl.ACL_Rule_IpRule_Ip, aclRule *vpp_acl.ACLRule) (*vpp_acl.A
 		// Both empty
 		aclRule.IsIPv6 = 0
 	}
+	aclRule.Proto = uint8(ipRule.GetProtocol())
 	return aclRule, nil
 }
 
