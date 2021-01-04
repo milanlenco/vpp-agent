@@ -26,7 +26,7 @@ import (
 )
 
 // Register registers model in DefaultRegistry.
-func Register(pb proto.Message, spec Spec, opts ...ModelOption) KnownModel {
+func Register(pb proto.Message, spec Spec, opts ...ModelOption) ProtoModel {
 	model, err := DefaultRegistry.Register(pb, spec, opts...)
 	if err != nil {
 		panic(err)
@@ -40,37 +40,37 @@ func RegisterRemote(remoteModel *ModelInfo, remoteRegistry *RemoteRegistry) {
 }
 
 // RegisteredModels returns models registered in the DefaultRegistry.
-func RegisteredModels() []KnownModel {
+func RegisteredModels() []ProtoModel {
 	return DefaultRegistry.RegisteredModels()
 }
 
 // GetModel returns registered model for given model name.
-func GetModel(name string) (KnownModel, error) {
+func GetModel(name string) (ProtoModel, error) {
 	return GetModelFromRegistry(name, DefaultRegistry)
 }
 
 // GetModel returns registered model in given registry for given model name.
-func GetModelFromRegistry(name string, modelRegistry Registry) (KnownModel, error) {
+func GetModelFromRegistry(name string, modelRegistry Registry) (ProtoModel, error) {
 	return modelRegistry.GetModel(name)
 }
 
 // GetModelFor returns model registered in DefaultRegistry for given proto message.
-func GetModelFor(x proto.Message) (KnownModel, error) {
+func GetModelFor(x proto.Message) (ProtoModel, error) {
 	return GetModelFromRegistryFor(x, DefaultRegistry)
 }
 
 // GetModelFromRegistryFor returns model registered in modelRegistry for given proto message
-func GetModelFromRegistryFor(x proto.Message, modelRegistry Registry) (KnownModel, error) {
+func GetModelFromRegistryFor(x proto.Message, modelRegistry Registry) (ProtoModel, error) {
 	return modelRegistry.GetModelFor(x)
 }
 
 // GetModelForKey returns model registered in DefaultRegistry which matches key.
-func GetModelForKey(key string) (KnownModel, error) {
+func GetModelForKey(key KeyV2) (ModelMeta, error) {
 	return DefaultRegistry.GetModelForKey(key)
 }
 
 // Key is a helper for the GetKey which panics on errors.
-func Key(x proto.Message) string {
+func Key(x proto.Message) KeyV2 {
 	key, err := GetKey(x)
 	if err != nil {
 		panic(err)
@@ -90,14 +90,14 @@ func Name(x proto.Message) string {
 // GetKey returns complete key for given model,
 // including key prefix defined by model specification.
 // It returns error if given model is not registered.
-func GetKey(x proto.Message) (string, error) {
+func GetKey(x proto.Message) (KeyV2, error) {
 	return GetKeyUsingModelRegistry(x, DefaultRegistry)
 }
 
 // GetKey returns complete key for given model from given model registry,
 // including key prefix defined by model specification.
 // It returns error if given model is not registered.
-func GetKeyUsingModelRegistry(message proto.Message, modelRegistry Registry) (string, error) {
+func GetKeyUsingModelRegistry(message proto.Message, modelRegistry Registry) (KeyV2, error) {
 	// find model for message
 	model, err := GetModelFromRegistryFor(message, modelRegistry)
 	if err != nil {
@@ -127,6 +127,19 @@ func GetName(x proto.Message) (string, error) {
 		return "", err
 	}
 	return name, nil
+}
+
+// AttributeKey is a helper for the GetAttributeKey which panics on errors.
+func AttributeKey(attrModelName string, itemVal, attrVal proto.Message) KeyV2 {
+	// TODO
+	return nil
+}
+
+// GetAttributeKey returns complete key for the given attribute instance,.
+// It returns error if the given item/attribute model is not registered.
+func GetAttributeKey(attrModelName string, itemVal, attrVal proto.Message) (KeyV2, error) {
+	// TODO
+	return nil, nil
 }
 
 // keyPrefix computes correct key prefix from given model. It

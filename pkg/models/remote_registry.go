@@ -40,7 +40,7 @@ func NewRemoteRegistry() *RemoteRegistry {
 
 // GetModel returns registered model for the given model name
 // or error if model is not found.
-func (r *RemoteRegistry) GetModel(name string) (KnownModel, error) {
+func (r *RemoteRegistry) GetModel(name string) (ProtoModel, error) {
 	model, found := r.modelByName[name]
 	if !found {
 		return &RemotelyKnownModel{}, fmt.Errorf("no remote model registered for name %v", name)
@@ -49,7 +49,7 @@ func (r *RemoteRegistry) GetModel(name string) (KnownModel, error) {
 }
 
 // GetModelFor returns registered model for the given proto message.
-func (r *RemoteRegistry) GetModelFor(x interface{}) (KnownModel, error) {
+func (r *RemoteRegistry) GetModelFor(x interface{}) (ProtoModel, error) {
 	messageDesc := proto.MessageV2(x).ProtoReflect().Descriptor()
 	messageFullName := string(messageDesc.FullName())
 	var foundModel *RemotelyKnownModel
@@ -67,7 +67,7 @@ func (r *RemoteRegistry) GetModelFor(x interface{}) (KnownModel, error) {
 }
 
 // GetModelForKey returns registered model for the given key or error.
-func (r *RemoteRegistry) GetModelForKey(key string) (KnownModel, error) {
+func (r *RemoteRegistry) GetModelForKey(key string) (ProtoModel, error) {
 	for _, model := range r.modelByName {
 		if model.IsKeyValid(key) {
 			return model, nil
@@ -77,8 +77,8 @@ func (r *RemoteRegistry) GetModelForKey(key string) (KnownModel, error) {
 }
 
 // RegisteredModels returns all registered modules.
-func (r *RemoteRegistry) RegisteredModels() []KnownModel {
-	var models []KnownModel
+func (r *RemoteRegistry) RegisteredModels() []ProtoModel {
+	var models []ProtoModel
 	for _, model := range r.modelByName {
 		models = append(models, model)
 	}
@@ -96,7 +96,7 @@ func (r *RemoteRegistry) MessageTypeRegistry() *protoregistry.Types {
 
 // Register registers remote model ModelInfo (given as interface{} for common register interface flexibility).
 // The given spec and options are already in ModelInfo and therefore these input arguments are ignored.
-func (r *RemoteRegistry) Register(model interface{}, spec Spec, opts ...ModelOption) (KnownModel, error) {
+func (r *RemoteRegistry) Register(model interface{}, spec Spec, opts ...ModelOption) (ProtoModel, error) {
 	if model == nil {
 		return nil, fmt.Errorf("can't register nil model")
 	}

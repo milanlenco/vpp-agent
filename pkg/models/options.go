@@ -23,6 +23,17 @@ type ModelOption func(*modelOptions)
 // proto message must be given.
 type NameFunc func(obj interface{}, messageGoType reflect.Type) (string, error)
 
+type attrOptions struct {
+	keySuffixTemplate string
+	keySuffixFunc     NameFunc
+}
+
+// ModelOption defines function type which sets model options.
+type ModelOption func(*modelOptions)
+
+// AttrOption defines function type which sets attribute options.
+type AttrOption func(*attrOptions)
+
 // WithNameTemplate returns option for models which sets function
 // for generating name of instances using custom template.
 func WithNameTemplate(t string) ModelOption {

@@ -22,15 +22,20 @@ import (
 	"go.ligato.io/cn-infra/v2/idxmap"
 
 	"go.ligato.io/vpp-agent/v3/proto/ligato/kvscheduler"
+
+	"go.ligato.io/vpp-agent/v3/pkg/models"
 )
 
 // KeySelector is used to filter keys.
-type KeySelector func(key string) bool
+type KeySelectorV2 func(key models.KeyV2) bool
+
+// ValueSelector is used to filter values.
+type ValueSelector func(value proto.Message) bool
 
 // KeyValuePair groups key with value.
-type KeyValuePair struct {
+type KeyValuePairV2 struct {
 	// Key identifies value.
-	Key string
+	Key models.KeyV2
 
 	// Value may represent some object, action or property.
 	//
@@ -67,14 +72,14 @@ type Metadata interface{}
 
 // KeyWithError stores error for a key whose value failed to get updated.
 type KeyWithError struct {
-	Key          string
+	Key          models.KeyV2
 	TxnOperation kvscheduler.TxnOperation
 	Error        error
 }
 
 // KVWithMetadata encapsulates key-value pair with metadata and the origin mark.
-type KVWithMetadata struct {
-	Key      string
+type KVWithMetadataV2 struct {
+	Key      models.KeyV2
 	Value    proto.Message
 	Metadata Metadata
 	Origin   ValueOrigin
@@ -193,16 +198,17 @@ func (v View) String() string {
 //     distinguish various value states) and dependencies/derivations as edges.
 type KVScheduler interface {
 	ValueProvider
+	SBNotifier
 
 	// RegisterKVDescriptor registers descriptor(s) for a set of selected
 	// keys. It should be called in the Init phase of agent plugins.
 	// Every key-value pair must have at most one descriptor associated with it
 	// (none for derived values expressing properties).
-	RegisterKVDescriptor(descriptor ...*KVDescriptor) error
+	RegisterKVDescriptor(descriptor ...KVDescriptorVAny) error
 
 	// GetRegisteredNBKeyPrefixes returns a list of key prefixes from NB with values
 	// described by registered descriptors and therefore managed by the scheduler.
-	GetRegisteredNBKeyPrefixes() []string
+	GetRegisteredNBKeyPrefixes() []models.KeyV2
 
 	// StartNBTransaction starts a new transaction from NB to SB plane.
 	// The enqueued actions are scheduled for execution by Txn.Commit().
@@ -212,23 +218,6 @@ type KVScheduler interface {
 	// are associated with transactions that have already finalized.
 	TransactionBarrier()
 
-	// PushSBNotification notifies about a spontaneous value change in the SB
-	// plane (i.e. not triggered by NB transaction).
-	//
-	// Pass <value> as nil if the value was removed, non-nil otherwise.
-	//
-	// Values pushed from SB do not trigger Create/Update/Delete operations
-	// on the descriptors - the change has already happened in SB - only
-	// dependencies and derived values are updated.
-	//
-	// Values pushed from SB are overwritten by those created via NB transactions,
-	// however. For example, notifications for values already created by NB
-	// are ignored. But otherwise, SB values (not managed by NB) are untouched
-	// by reconciliation or any other operation of the scheduler/descriptor.
-	// Note: Origin in KVWithMetadata is ignored and can be left unset
-	// (automatically assumed to be FromSB).
-	PushSBNotification(notif ...KVWithMetadata) error
-
 	// GetMetadataMap returns (read-only) map associating value label with value
 	// metadata of a given descriptor.
 	// Returns nil if the descriptor does not expose metadata.
@@ -236,7 +225,7 @@ type KVScheduler interface {
 
 	// GetValueStatus returns the status of a non-derived value with the given
 	// key.
-	GetValueStatus(key string) *kvscheduler.BaseValueStatus
+	GetValueStatus(key models.KeyV2) *kvscheduler.BaseValueStatus
 
 	// WatchValueStatus allows to watch for changes in the status of non-derived
 	// values with keys selected by the selector (all if keySelector==nil).
@@ -265,12 +254,32 @@ type ValueProvider interface {
 	DumpValuesByKeyPrefix(keyPrefix string, view View) (kvs []KVWithMetadata, err error)
 }
 
+// SBNotifier allows SB watchers to push notifications into KVScheduler.
+type SBNotifier interface {
+	// PushSBNotification notifies about a spontaneous value change in the SB
+	// plane (i.e. not triggered by NB transaction).
+	//
+	// Pass <value> as nil if the value was removed, non-nil otherwise.
+	//
+	// Values pushed from SB do not trigger Create/Update/Delete operations
+	// on the descriptors - the change has already happened in SB - only
+	// dependencies and derived values are updated.
+	//
+	// Values pushed from SB are overwritten by those created via NB transactions,
+	// however. For example, notifications for values already created by NB
+	// are ignored. But otherwise, SB values (not managed by NB) are untouched
+	// by reconciliation or any other operation of the scheduler/descriptor.
+	// Note: Origin in KVWithMetadata is ignored and can be left unset
+	// (automatically assumed to be FromSB).
+	PushSBNotification(notif ...KVWithMetadataV2) error
+}
+
 // Txn represent a single transaction.
 // Scheduler starts to plan and execute actions only after Commit is called.
 type Txn interface {
 	// SetValue changes (non-derived) value.
 	// If <value> is nil, the value will get deleted.
-	SetValue(key string, value proto.Message) Txn
+	SetValue(key models.KeyV2, value proto.Message) Txn
 
 	// Commit orders scheduler to execute enqueued operations.
 	// Operations with unmet dependencies will get postponed and possibly

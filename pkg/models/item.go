@@ -115,12 +115,12 @@ func unmarshalItemDataAnyOfLocalModel(itemAny *any.Any) (proto.Message, error) {
 }
 
 // GetModelForItem returns model for given item.
-func GetModelForItem(item *api.Item) (KnownModel, error) {
+func GetModelForItem(item *api.Item) (ProtoModel, error) {
 	return GetModelFromModelRegistryForItem(item, DefaultRegistry)
 }
 
 // GetModelFromModelRegistryForItem returns model for given item (using given model registry)
-func GetModelFromModelRegistryForItem(item *api.Item, modelRegistry Registry) (KnownModel, error) {
+func GetModelFromModelRegistryForItem(item *api.Item, modelRegistry Registry) (ProtoModel, error) {
 	if item.GetId() == nil {
 		return nil, fmt.Errorf("item id is nil")
 	}

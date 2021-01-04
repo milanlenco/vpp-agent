@@ -55,7 +55,7 @@ func NewRegistry() *LocalRegistry {
 
 // GetModel returns registered model for the given model name
 // or error if model is not found.
-func (r *LocalRegistry) GetModel(name string) (KnownModel, error) {
+func (r *LocalRegistry) GetModel(name string) (ProtoModel, error) {
 	model, found := r.modelNames[name]
 	if !found {
 		if model, err := r.proxied.GetModel(name); err == nil {
@@ -67,7 +67,7 @@ func (r *LocalRegistry) GetModel(name string) (KnownModel, error) {
 }
 
 // GetModelFor returns registered model for the given proto message.
-func (r *LocalRegistry) GetModelFor(x interface{}) (KnownModel, error) {
+func (r *LocalRegistry) GetModelFor(x interface{}) (ProtoModel, error) {
 	// find model by Go type
 	t := reflect.TypeOf(x)
 	model, found := r.registeredModelsByGoType[t]
@@ -119,7 +119,7 @@ func (r *LocalRegistry) lazyInitRegisteredTypesByProtoName() {
 }
 
 // GetModelForKey returns registered model for the given key or error.
-func (r *LocalRegistry) GetModelForKey(key string) (KnownModel, error) {
+func (r *LocalRegistry) GetModelForKey(key string) (ProtoModel, error) {
 	for _, model := range r.registeredModelsByGoType {
 		if model.IsKeyValid(key) {
 			return model, nil
@@ -132,8 +132,8 @@ func (r *LocalRegistry) GetModelForKey(key string) (KnownModel, error) {
 }
 
 // RegisteredModels returns all registered modules.
-func (r *LocalRegistry) RegisteredModels() []KnownModel {
-	var models []KnownModel
+func (r *LocalRegistry) RegisteredModels() []ProtoModel {
+	var models []ProtoModel
 	for _, typ := range r.ordered {
 		models = append(models, r.registeredModelsByGoType[typ])
 	}
@@ -161,7 +161,7 @@ func (r *LocalRegistry) MessageTypeRegistry() *protoregistry.Types {
 // requests being proxied from one to another (remote model registered into LocalRegistry may act as a proxy for the
 // agent from which it was learned).
 // If spec.Class is unset then it defaults to 'config'.
-func (r *LocalRegistry) Register(x interface{}, spec Spec, opts ...ModelOption) (KnownModel, error) {
+func (r *LocalRegistry) Register(x interface{}, spec Spec, opts ...ModelOption) (ProtoModel, error) {
 	// check if the model was learned remotely
 	if modelInfo, isProxied := x.(*ModelInfo); isProxied {
 		// check for collision with local models

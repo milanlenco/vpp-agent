@@ -1,36 +1,22 @@
-// Copyright (c) 2018 Cisco and/or its affiliates.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at:
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package api
 
 import (
-	"context"
 	"github.com/golang/protobuf/proto"
-	"go.ligato.io/cn-infra/v2/idxmap"
-	"go.ligato.io/vpp-agent/v3/pkg/models"
 )
+
+// Legacy definition of Dependency.
+type DependencyV1 = Dependency
 
 // Dependency references another kv pair that must exist before the associated
 // value can be created.
-type DependencyV2 struct {
+type Dependency struct {
 	// Label should be a short human-readable string labeling the dependency.
 	// Must be unique in the list of dependencies for a value.
 	Label string
 
 	// Key of another kv pair that the associated value depends on.
 	// If empty, AnyOf must be defined instead.
-	Key models.KeyV2
+	Key string
 
 	// AnyOf defines a set of keys from which at least one must reference
 	// a created object for the dependency to be considered satisfied - i.e.
@@ -39,18 +25,11 @@ type DependencyV2 struct {
 	// BEWARE: AnyOf comes with more overhead than a static key dependency
 	// (especially when KeySelector is used without KeyPrefixes), so prefer to
 	// use Key whenever possible.
-	AnyOf AnyOfDependencyV2
-
-	// ValueSelector, if defined (non-nil), is combined (ANDed) with key-based
-	// selectors (Key/AnyOf) to filter which key-value pairs are satisfying
-	// the dependency also based on the value. The values whose keys are matched
-	// by key selectors are further queried with the ValueSelector and those
-	// for which the predicate returns true are considered as dependency targets.
-	// In other words, when value selector is defined, a dependency is satisfied
-	// if for at least one value with key matched by key selectors the predicate
-	// returns true.
-	ValueSelector ValueSelector
+	AnyOf AnyOfDependency
 }
+
+// Legacy definition of AnyOf Dependency.
+type AnyOfDependencyV1 = AnyOfDependency
 
 // AnyOfDependency defines a set of keys from which at least one must reference
 // a created object for the dependency to be considered satisfied.
@@ -67,14 +46,14 @@ type DependencyV2 struct {
 // a black box that can potentially match any key and must be therefore checked
 // with every key entering the key space (i.e. linear complexity as opposed to
 // logarithmic complexity when the key space is suitably reduced with prefixes).
-type AnyOfDependencyV2 struct {
+type AnyOfDependency struct {
 	// KeyPrefixes is a list of all (longest common) key prefixes found in the
 	// keys satisfying the dependency. If defined (not empty), the scheduler will
 	// know that for a given key to match the dependency, it must begin with at
 	// least one of the specified prefixes.
 	// Keys matched by these prefixes can be further filtered with the KeySelector
 	// below.
-	KeyPrefixes []models.KeyV2
+	KeyPrefixes []string
 
 	// KeySelector, if defined (non-nil), must return true for at least one of
 	// the already created keys for the dependency to be considered satisfied.
@@ -84,55 +63,7 @@ type AnyOfDependencyV2 struct {
 	KeySelector KeySelector
 }
 
-// MetadataMapFactory can be used by descriptor to define a custom map associating
-// value labels with value metadata, potentially extending the basic in-memory
-// implementation (memNamedMapping) with secondary indexes, type-safe watch, etc.
-// If metadata are enabled (by WithMetadata method), the scheduler will create
-// an instance of the map using the provided factory during the descriptor
-// registration (RegisterKVDescriptor). Immediately afterwards, the mapping
-// is available read-only via scheduler's method GetMetadataMap. The returned
-// map can be then casted to the customized implementation, but it should remain
-// read-only (i.e. define read-only interface for the customized implementation).
-type MetadataMapFactory func() idxmap.NamedMappingRW
-
-// ValueOrigin is one of: FromNB, FromSB, UnknownOrigin.
-type ValueOrigin int
-
-const (
-	// UnknownOrigin is given to a retrieved value when it cannot be determined
-	// if the value was previously created by NB or not.
-	// Scheduler will then look into its history to find out if the value was
-	// ever managed by NB to determine the origin heuristically.
-	UnknownOrigin ValueOrigin = iota
-
-	// FromNB marks value created via NB transaction.
-	FromNB
-
-	// FromSB marks value not managed by NB - i.e. created automatically or
-	// externally in SB.
-	FromSB
-)
-
-// String converts ValueOrigin to string.
-func (vo ValueOrigin) String() string {
-	switch vo {
-	case FromNB:
-		return "from-NB"
-	case FromSB:
-		return "from-SB"
-	default:
-		return "unknown"
-	}
-}
-
-// KVDescriptorVAny is interface implemented by every version of KVDescriptor.
-// Currently there are two versions: v1 and v2.
-type KVDescriptorVAny interface {
-	// Marks KVDescriptor.
-	isKVDescriptor()
-	// Currently returns either 1 or 2.
-	kvDescriptorVersion() int
-}
+type KVDescriptorV1 = KVDescriptor
 
 // KVDescriptor teaches KVScheduler how to CRUD values under keys matched
 // by KeySelector().
@@ -151,22 +82,55 @@ type KVDescriptorVAny interface {
 // with it. Typically, properties of base values are implemented as derived
 // (often empty) values without attached SB operations, used as targets for
 // dependencies.
-type KVDescriptorV2 struct {
-	Model models.ModelMeta
+//
+// Note: this is a legacy version of KVDescriptor (version 1).
+//       Prefer to use KVDescriptorV2 instead.
+type KVDescriptor struct {
+	// Name of the descriptor unique across all registered descriptors.
+	Name string
 
-	// ValueComparator can be *optionally* provided to customize comparison
+	// KeySelector selects keys described by this descriptor.
+	KeySelector KeySelector
+
+	// ValueTypeName defines name of the proto.Message type used to represent
+	// described values. This attribute is mandatory, otherwise LazyValue-s
+	// received from NB (e.g. datasync package) cannot be un-marshalled.
+	// Note: proto Messages are registered against this type name in the generated
+	// code using proto.RegisterType().
+	ValueTypeName string
+
+	// KeyLabel can be *optionally* defined to provide a *shorter* value
+	// identifier, that, unlike the original key, only needs to be unique in the
+	// key scope of the descriptor and not necessarily in the entire key space.
+	// If defined, key label will be used as value identifier in the metadata map
+	// and in the non-verbose logs.
+	KeyLabel func(key string) string
+
+	// NBKeyPrefix is a key prefix that the scheduler should watch
+	// in NB to receive all NB-values described by this descriptor.
+	// The key space defined by NBKeyPrefix may cover more than KeySelector
+	// selects - the scheduler will filter the received values and pass
+	// to the descriptor only those that are really chosen by KeySelector.
+	// The opposite may be true as well - KeySelector may select some extra
+	// SB-only values, which the scheduler will not watch for in NB. Furthermore,
+	// the keys may already be requested for watching by another descriptor
+	// within the same plugin and in such case it is not needed to mention the
+	// same prefix again.
+	NBKeyPrefix string
+
+	// ValueComparator can be *optionally* provided to customize comparision
 	// of values for equality.
 	// Scheduler compares values to determine if Update operation is really
 	// needed.
 	// For NB values, <oldValue> was either previously set by NB or refreshed
 	// from SB, whereas <newValue> is a new value to be applied by NB.
-	ValueComparator func(ctx context.Context, oldValue, newValue proto.Message) bool
+	ValueComparator func(key string, oldValue, newValue proto.Message) bool
 
 	// WithMetadata tells scheduler whether to enable metadata - run-time,
 	// descriptor-owned, scheduler-opaque, data carried alongside a created
 	// (non-derived) value.
-	// If enabled, the scheduler will maintain a map between key suffix (instance name)
-	// and the associated metadata.
+	// If enabled, the scheduler will maintain a map between key (-label, if
+	// KeyLabel is defined) and the associated metadata.
 	// If <WithMetadata> is false, metadata returned by Create will be ignored
 	// and other methods will receive nil metadata.
 	WithMetadata bool
@@ -184,7 +148,7 @@ type KVDescriptorV2 struct {
 	// The descriptor can further specify which field(s) are not valid
 	// by wrapping the validation error together with a slice of invalid fields
 	// using the error InvalidValueError (see errors.go).
-	Validate func(ctx context.Context, value proto.Message) error
+	Validate func(key string, value proto.Message) error
 
 	// Create new value handler.
 	// For non-derived values, descriptor may return metadata to associate with
@@ -192,17 +156,17 @@ type KVDescriptorV2 struct {
 	// For derived values, Create+Delete+Update are optional. Typically, properties
 	// of base values are implemented as derived (often empty) values without
 	// attached SB operations, used as targets for dependencies.
-	Create func(ctx context.Context, value proto.Message) (metadata Metadata, err error)
+	Create func(key string, value proto.Message) (metadata Metadata, err error)
 
 	// Delete value handler.
 	// If Create is defined, Delete handler must be provided as well.
-	Delete func(ctx context.Context, value proto.Message, metadata Metadata) error
+	Delete func(key string, value proto.Message, metadata Metadata) error
 
 	// Update value handler.
 	// The handler is optional - if not defined, value change will be carried out
 	// via full re-creation (Delete followed by Create with the new value).
 	// <newMetadata> can re-use the <oldMetadata>.
-	Update func(ctx context.Context, oldValue, newValue proto.Message, oldMetadata Metadata) (newMetadata Metadata, err error)
+	Update func(key string, oldValue, newValue proto.Message, oldMetadata Metadata) (newMetadata Metadata, err error)
 
 	// UpdateWithRecreate can be defined to tell the scheduler if going from
 	// <oldValue> to <newValue> requires the value to be completely re-created
@@ -211,7 +175,7 @@ type KVDescriptorV2 struct {
 	// of the Update operation - if provided, it is assumed that any change
 	// can be applied incrementally, otherwise a full re-creation is the only way
 	// to go.
-	UpdateWithRecreate func(ctx context.Context, oldValue, newValue proto.Message, metadata Metadata) bool
+	UpdateWithRecreate func(key string, oldValue, newValue proto.Message, metadata Metadata) bool
 
 	// Retrieve should return all non-derived values described by this descriptor
 	// that *really* exist in the southbound plane (and not what the current
@@ -228,8 +192,7 @@ type KVDescriptorV2 struct {
 	// The callback is optional - if not defined, it is assumed that descriptor
 	// is not able to read the current SB state and thus refresh cannot be
 	// performed for its kv-pairs.
-	// TODO: put correlate into context?
-	Retrieve func(ctx context.Context, correlate []KVWithMetadataV2) ([]KVWithMetadataV2, error)
+	Retrieve func(correlate []KVWithMetadata) ([]KVWithMetadata, error)
 
 	// IsRetriableFailure tells scheduler if the given error, returned by one
 	// of Create/Delete/Update handlers, will always be returned for the
@@ -251,27 +214,28 @@ type KVDescriptorV2 struct {
 	//
 	// The callback is optional - if not defined, there will be no values derived
 	// from kv-pairs of the descriptor.
-	DerivedValues func(ctx context.Context, value proto.Message) []KeyValuePairV2
+	DerivedValues func(key string, value proto.Message) []KeyValuePair
 
-	// Dependencies are kv-pairs that must already exist for the value to be created.
+	// Dependencies are keys that must already exist for the value to be created.
 	// Conversely, if a dependency is to be removed, all values that depend on it
 	// are deleted first and cached for a potential future re-creation.
 	// Dependencies returned in the list are AND-ed.
 	// The callback is optional - if not defined, the kv-pairs of the descriptor
 	// are assumed to have no dependencies.
-	Dependencies func(ctx context.Context, value proto.Message) []DependencyV2
+	Dependencies func(key string, value proto.Message) []Dependency
 
 	// RetrieveDependencies is a list of descriptors whose values are needed
 	// and should be already retrieved prior to calling Retrieve for this
 	// descriptor.
 	// Metadata for values already retrieved are available via GetMetadataMap().
-	RetrieveDependencies []models.ModelMeta
+	RetrieveDependencies []string /* descriptor name */
 }
 
 // Marks KVDescriptor.
-func (d *KVDescriptorV2) isKVDescriptor() {}
+func (d *KVDescriptor) isKVDescriptor() {}
 
-// kvDescriptorVersion returns 2.
-func (d *KVDescriptorV2) kvDescriptorVersion() int {
-	return 2
+// kvDescriptorVersion returns 1.
+func (d *KVDescriptor) kvDescriptorVersion() int {
+	return 1
 }
+

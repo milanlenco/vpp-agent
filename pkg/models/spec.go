@@ -23,6 +23,12 @@ type Spec struct {
 	Class   string
 }
 
+// Spec defines attribute specification.
+type AttrSpec struct {
+	Type  string
+	Class string
+}
+
 func ToSpec(s *api.ModelSpec) Spec {
 	return Spec{
 		Module:  s.GetModule(),
