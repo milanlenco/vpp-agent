@@ -1,0 +1,30 @@
+version: '3.3'
+
+services:
+  vpp-router:
+    container_name: vpp-router
+    image: "dev_vpp_agent"
+    ports:
+      - "5002:5002"
+      - "9191:9191"
+    privileged: true
+    pid: "host"
+    environment:
+      INITIAL_LOGLVL: "debug"
+      MICROSERVICE_LABEL: "vpp-router"
+      ETCD_CONFIG: ""
+      DEBUG_GOVPP: "msgid"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./initfileregistry.conf:/opt/vpp-agent/dev/initfileregistry.conf
+      - ./config:/opt/vpp-agent/dev/config
+
+
+  linux-router:
+    container_name: linux-router
+    image: "cnf-nat44-docker.pantheon.tech/tester:20.09"
+    environment:
+      MICROSERVICE_LABEL: "linux-router"
+    cap_add:
+      - NET_ADMIN
+    command: sleep infinity

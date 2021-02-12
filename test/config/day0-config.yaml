@@ -1,0 +1,37 @@
+linuxConfig:
+  interfaces:
+    - name: linux_to_vpp
+      type: TAP_TO_VPP
+      namespace:
+        type: MICROSERVICE
+        reference: linux-router
+      hostIfName: vpp
+      enabled: true
+      ipAddresses:
+        - 200.99.99.1/24
+      mtu: 1500
+      tap:
+        vppTapIfName: vpp_to_linux
+
+vppConfig:
+  interfaces:
+    - name: vpp_to_linux
+      type: TAP
+      enabled: true
+      ipAddresses:
+        - 200.99.99.2/24
+      mtu: 1500
+      tap:
+        version: 2
+        toMicroservice: linux-router
+  routes:
+    - dstNetwork: 0.0.0.0/0
+      nextHopAddr: 200.99.99.1
+      outgoingInterface: vpp_to_linux
+  nat44Global:
+    forwarding: true
+  nat44Interfaces:
+    - name: vpp_to_linux
+      natInside: true
+  nat44Pools:
+    - firstIp: 200.99.99.2
