@@ -325,6 +325,8 @@ github.com/mitchellh/go-testing-interface v1.0.0 h1:fzU/JVNcaqHQEcVFAKeR41fkiLdI
 github.com/mitchellh/go-testing-interface v1.0.0/go.mod h1:kRemZodwjscx+RGhAo8eIhFbs2+BFgRtFPeD/KE+zxI=
 github.com/mitchellh/mapstructure v1.1.2 h1:fmNYVwqnSfB9mZU6OS2O6GsXM+wcskZDuKQzvN1EDeE=
 github.com/mitchellh/mapstructure v1.1.2/go.mod h1:FVVH3fgwuzCH5S8UJGiWEs2h04kUh9fWfEaFds41c1Y=
+github.com/mitchellh/mapstructure v1.4.1 h1:CpVNEelQCZBooIPDn+AR3NpivK/TIKU8bDxdASFVQag=
+github.com/mitchellh/mapstructure v1.4.1/go.mod h1:bFUtVrKA4DC2yAKiSyO/QUcy7e+RRV2QTWOzhPopBRo=
 github.com/moby/sys/mount v0.1.0 h1:Ytx78EatgFKtrqZ0BvJ0UtJE472ZvawVmil6pIfuCCU=
 github.com/moby/sys/mount v0.1.0/go.mod h1:FVQFLDRWwyBjDTBNQXDlWnSFREqOo3OKX9aqhmeoo74=
 github.com/moby/sys/mountinfo v0.1.0 h1:r8vMRbMAFEAfiNptYVokP+nfxPJzvRuia5e2vzXtENo=
